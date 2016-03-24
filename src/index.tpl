@@ -5,6 +5,7 @@
         <link rel="shortcut icon" type="image/icon" href="favicon.ico" />
         <link href="vendor.css" rel="stylesheet">
         <link href="bundle.css" rel="stylesheet">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/json-schema-faker/<%- version %>/json-schema-faker.js"></script>
         <script src="vendor.js"></script>
         <script src="bundle.js"></script>
 

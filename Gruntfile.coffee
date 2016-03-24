@@ -70,7 +70,7 @@ module.exports = (grunt) ->
   grunt.registerTask 'default', [
     'npm-install'
     'bower'
-    'browserify'
+    #'browserify'
     'uglify'
     'cssmin'
     'template'

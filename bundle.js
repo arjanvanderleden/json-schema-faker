@@ -1,742 +1,5 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-module.exports = require('./lib/jsf')
-  .extend('chance', function() {
-    try {
-      return require('chance').Chance();
-    } catch (e) {
-      return null;
-    }
-  })
-  .extend('faker', function() {
-    try {
-      return require('faker');
-    } catch (e) {
-      return null;
-    }
-  });
-
-},{"./lib/jsf":2,"chance":20,"faker":28}],2:[function(require,module,exports){
-var container = require('./util/container'),
-    traverse = require('./util/traverse'),
-    formats = require('./util/formats'),
-    random = require('./util/random'),
-    merge = require('./util/merge');
-
-var deref = require('deref');
-
-function isKey(prop) {
-  return prop === 'enum' || prop === 'required' || prop === 'definitions';
-}
-
-function generate(schema, refs, ex) {
-  var $ = deref();
-
-  try {
-    var seen = {};
-
-    return traverse($(schema, refs, ex), [], function reduce(sub) {
-      if (seen[sub.$ref] <= 0) {
-        delete sub.$ref;
-        delete sub.oneOf;
-        delete sub.anyOf;
-        delete sub.allOf;
-        return sub;
-      }
-
-      if (typeof sub.$ref === 'string') {
-        var id = sub.$ref;
-
-        delete sub.$ref;
-
-        if (!seen[id]) {
-          // TODO: this should be configurable
-          seen[id] = random(1, 5);
-        }
-
-        seen[id] -= 1;
-
-        merge(sub, $.util.findByRef(id, $.refs));
-      }
-
-      if (Array.isArray(sub.allOf)) {
-        var schemas = sub.allOf;
-
-        delete sub.allOf;
-
-        // this is the only case where all sub-schemas
-        // must be resolved before any merge
-        schemas.forEach(function(s) {
-          merge(sub, reduce(s));
-        });
-      }
-
-      if (Array.isArray(sub.oneOf || sub.anyOf)) {
-        var mix = sub.oneOf || sub.anyOf;
-
-        delete sub.anyOf;
-        delete sub.oneOf;
-
-        merge(sub, random.pick(mix));
-      }
-
-      for (var prop in sub) {
-        if ((Array.isArray(sub[prop]) || typeof sub[prop] === 'object') && !isKey(prop)) {
-          sub[prop] = reduce(sub[prop]);
-        }
-      }
-
-      return sub;
-    });
-  } catch (e) {
-    if (e.path) {
-      throw new Error(e.message + ' in ' + '/' + e.path.join('/'));
-    } else {
-      throw e;
-    }
-  }
-}
-
-generate.formats = formats;
-
-// returns itself for chaining
-generate.extend = function(name, cb) {
-  container.set(name, cb);
-  return generate;
-};
-
-module.exports = generate;
-
-},{"./util/container":10,"./util/formats":12,"./util/merge":15,"./util/random":17,"./util/traverse":18,"deref":21}],3:[function(require,module,exports){
-var random = require('../util/random'),
-    traverse = require('../util/traverse'),
-    hasProps = require('../util/has-props');
-
-var ParseError = require('../util/error');
-
-function unique(path, items, value, sample, resolve) {
-  var tmp = [],
-      seen = [];
-
-  function walk(obj) {
-    var json = JSON.stringify(obj);
-
-    if (seen.indexOf(json) === -1) {
-      seen.push(json);
-      tmp.push(obj);
-    }
-  }
-
-  items.forEach(walk);
-
-  // TODO: find a better solution?
-  var limit = 100;
-
-  while (tmp.length !== items.length) {
-    walk(traverse(value.items || sample, path, resolve));
-
-    if (!limit--) {
-      break;
-    }
-  }
-
-  return tmp;
-}
-
-module.exports = function(value, path, resolve) {
-  var items = [];
-
-  if (!(value.items || value.additionalItems)) {
-    if (hasProps(value, 'minItems', 'maxItems', 'uniqueItems')) {
-      throw new ParseError('missing items for ' + JSON.stringify(value), path);
-    }
-
-    return items;
-  }
-
-  if (Array.isArray(value.items)) {
-    return Array.prototype.concat.apply(items, value.items.map(function(item, key) {
-      return traverse(item, path.concat(['items', key]), resolve);
-    }));
-  }
-
-  var length = random(value.minItems, value.maxItems, 1, 5),
-      sample = typeof value.additionalItems === 'object' ? value.additionalItems : {};
-
-  for (var current = items.length; current < length; current += 1) {
-    items.push(traverse(value.items || sample, path.concat(['items', current]), resolve));
-  }
-
-  if (value.uniqueItems) {
-    return unique(path.concat(['items']), items, value, sample, resolve);
-  }
-
-  return items;
-};
-
-},{"../util/error":11,"../util/has-props":13,"../util/random":17,"../util/traverse":18}],4:[function(require,module,exports){
-module.exports = function() {
-  return Math.random() > 0.5;
-};
-
-},{}],5:[function(require,module,exports){
-var number = require('./number');
-
-// The `integer` type is just a wrapper for the `number` type. The `number` type
-// returns floating point numbers, and `integer` type truncates the fraction
-// part, leaving the result as an integer.
-//
-module.exports = function(value) {
-  var generated = number(value);
-  // whether the generated number is positive or negative, need to use either
-  // floor (positive) or ceil (negative) function to get rid of the fraction
-  return generated > 0 ? Math.floor(generated) : Math.ceil(generated);
-};
-
-},{"./number":7}],6:[function(require,module,exports){
-module.exports = function() {
-  return null;
-};
-
-},{}],7:[function(require,module,exports){
-var MIN_INTEGER = -100000000,
-    MAX_INTEGER = 100000000;
-
-var random = require('../util/random'),
-    string = require('./string');
-
-module.exports = function(value) {
-  if (value.faker || value.chance) {
-    return string(value);
-  }
-
-  var multipleOf = value.multipleOf;
-
-  var min = typeof value.minimum === 'undefined' ? MIN_INTEGER : value.minimum,
-      max = typeof value.maximum === 'undefined' ? MAX_INTEGER : value.maximum;
-
-  if (multipleOf) {
-    max = Math.floor(max / multipleOf) * multipleOf;
-    min = Math.ceil(min / multipleOf) * multipleOf;
-  }
-
-  if (value.exclusiveMinimum && value.minimum && min === value.minimum) {
-    min += multipleOf || 1;
-  }
-
-  if (value.exclusiveMaximum && value.maximum && max === value.maximum) {
-    max -= multipleOf || 1;
-  }
-
-  if (multipleOf) {
-    return Math.floor(random(min, max) / multipleOf) * multipleOf;
-  }
-
-  if (min > max) {
-    return NaN;
-  }
-
-  return random({
-    min: min,
-    max: max,
-    hasPrecision: true
-  });
-};
-
-},{"../util/random":17,"./string":9}],8:[function(require,module,exports){
-var container = require('../util/container'),
-    random = require('../util/random'),
-    words = require('../util/words'),
-    traverse = require('../util/traverse'),
-    hasProps = require('../util/has-props');
-
-var RandExp = container.get('randexp'),
-    randexp = RandExp.randexp;
-
-var ParseError = require('../util/error');
-
-module.exports = function(value, path, resolve) {
-  var props = {};
-
-  if (!(value.properties || value.patternProperties || value.additionalProperties)) {
-    if (hasProps(value, 'minProperties', 'maxProperties', 'dependencies', 'required')) {
-      throw new ParseError('missing properties for ' + JSON.stringify(value), path);
-    }
-
-    return props;
-  }
-
-  var reqProps = value.required || [],
-      allProps = value.properties ? Object.keys(value.properties) : [];
-
-  reqProps.forEach(function(key) {
-    if (value.properties && value.properties[key]) {
-      props[key] = value.properties[key];
-    }
-  });
-
-  var optProps = allProps.filter(function(prop) {
-    return reqProps.indexOf(prop) === -1;
-  });
-
-  if (value.patternProperties) {
-    optProps = Array.prototype.concat.apply(optProps, Object.keys(value.patternProperties));
-  }
-
-  var length = random(value.minProperties, value.maxProperties, 0, optProps.length);
-
-  random.shuffle(optProps).slice(0, length).forEach(function(key) {
-    if (value.properties && value.properties[key]) {
-      props[key] = value.properties[key];
-    } else {
-      props[randexp(key)] = value.patternProperties[key];
-    }
-  });
-
-  var current = Object.keys(props).length,
-      sample = typeof value.additionalProperties === 'object' ? value.additionalProperties : {};
-
-  if (current < length) {
-    words(length - current).forEach(function(key) {
-      props[key + randexp('[a-f\\d]{4,7}')] = sample;
-    });
-  }
-
-  return traverse(props, path.concat(['properties']), resolve);
-};
-
-},{"../util/container":10,"../util/error":11,"../util/has-props":13,"../util/random":17,"../util/traverse":18,"../util/words":19}],9:[function(require,module,exports){
-var container = require('../util/container');
-
-var faker = container.get('faker'),
-    chance = container.get('chance'),
-    RandExp = container.get('randexp'),
-    randexp = RandExp.randexp;
-
-var words = require('../util/words'),
-    random = require('../util/random'),
-    formats = require('../util/formats');
-
-var regexps = {
-  email: '[a-zA-Z\\d][a-zA-Z\\d-]{1,13}[a-zA-Z\\d]@{hostname}',
-  hostname: '[a-zA-Z]{1,33}\\.[a-z]{2,4}',
-  ipv6: '[abcdef\\d]{4}(:[abcdef\\d]{4}){7}',
-  uri: '[a-zA-Z][a-zA-Z0-9+-.]*'
-};
-
-function get(obj, key) {
-  var parts = key.split('.');
-
-  while (parts.length) {
-    var prop = parts.shift();
-
-    if (!obj[prop]) {
-      break;
-    }
-
-    obj = obj[prop];
-  }
-
-  return obj;
-}
-
-function thunk() {
-  return words().join(' ');
-}
-
-function generate(value) {
-  if (value.use) {
-    var args = [],
-        path = value.key;
-
-    if (typeof path === 'object') {
-      path = Object.keys(path)[0];
-
-      if (Array.isArray(value.key[path])) {
-        args = value.key[path];
-      } else {
-        args.push(value.key[path]);
-      }
-    }
-
-    var gen = get(value.gen, path);
-
-    if (typeof gen !== 'function') {
-      throw new Error('unknown ' + value.use + '-generator for ' + JSON.stringify(value.key));
-    }
-
-    return gen.apply(value.gen, args);
-  }
-
-  switch (value.format) {
-    case 'date-time':
-      return new Date(random(0, 100000000000000)).toISOString();
-
-    case 'email':
-    case 'hostname':
-    case 'ipv6':
-    case 'uri':
-      return randexp(regexps[value.format]).replace(/\{(\w+)\}/, function(matches, key) {
-        return randexp(regexps[key]);
-      });
-
-    case 'ipv4':
-      return [0, 0, 0, 0].map(function() {
-        return random(0, 255);
-      }).join('.');
-
-    case 'regex':
-      // TODO: discuss
-      return '.+?';
-
-    default:
-      var callback = formats(value.format);
-
-      if (typeof callback !== 'function') {
-        throw new Error('unknown generator for ' + JSON.stringify(value.format));
-      }
-
-      var generators = {
-        faker: faker,
-        chance: chance,
-        randexp: randexp
-      };
-
-      return callback(generators, value);
-  }
-}
-
-module.exports = function(value) {
-  if (value.faker || value.chance) {
-    return generate({
-      use: value.faker ? 'faker' : 'chance',
-      gen: value.faker ? faker : chance,
-      key: value.faker || value.chance
-    });
-  }
-
-  if (value.format) {
-    return generate(value);
-  }
-
-  if (value.pattern) {
-    return randexp(value.pattern);
-  }
-
-  var min = Math.max(0, value.minLength || 0),
-      max = random(min, value.maxLength || 140);
-
-  var sample = thunk();
-
-  while (sample.length < min) {
-    sample += thunk();
-  }
-
-  if (sample.length > max) {
-    sample = sample.substr(0, max);
-  }
-
-  return sample;
-};
-
-},{"../util/container":10,"../util/formats":12,"../util/random":17,"../util/words":19}],10:[function(require,module,exports){
-// static requires - handle both initial dependency load (deps will be available
-// among other modules) as well as they will be included by browserify AST
-var container = {
-  faker: null,
-  chance: null,
-
-  // randexp is required for "pattern" values
-  randexp: require('randexp')
-};
-
-module.exports = {
-  set: function(name, callback) {
-    if (typeof container[name] === 'undefined') {
-      throw new ReferenceError('"' + name + '" dependency is not allowed.');
-    }
-
-    container[name] = callback(container[name]);
-  },
-  get: function(name) {
-    if (typeof container[name] === 'undefined') {
-      throw new ReferenceError('"' + name + '" dependency doesn\'t exist.');
-    }
-
-    return container[name];
-  }
-};
-
-},{"randexp":945}],11:[function(require,module,exports){
-function ParseError(message, path) {
-  this.message = message;
-  this.path = path;
-  this.name = 'ParseError';
-}
-
-ParseError.prototype = Error.prototype;
-
-module.exports = ParseError;
-
-},{}],12:[function(require,module,exports){
-var registry = {};
-
-module.exports = function(name, callback) {
-  if (callback) {
-    registry[name] = callback;
-  } else if (typeof name === 'object') {
-    for (var method in name) {
-      registry[method] = name[method];
-    }
-  } else if (name) {
-    return registry[name];
-  }
-
-  return registry;
-};
-
-},{}],13:[function(require,module,exports){
-module.exports = function(obj) {
-  return Array.prototype.slice.call(arguments, 1).filter(function(key) {
-    return typeof obj[key] !== 'undefined';
-  }).length > 0;
-};
-
-},{}],14:[function(require,module,exports){
-var inferredProperties = {
-  array: [
-    'additionalItems',
-    'items',
-    'maxItems',
-    'minItems',
-    'uniqueItems'
-  ],
-  integer: [
-    'exclusiveMaximum',
-    'exclusiveMinimum',
-    'maximum',
-    'minimum',
-    'multipleOf'
-  ],
-  object: [
-    'additionalProperties',
-    'dependencies',
-    'maxProperties',
-    'minProperties',
-    'patternProperties',
-    'properties',
-    'required'
-  ],
-  string: [
-    'maxLength',
-    'menlength',
-    'pattern'
-  ]
-};
-
-var subschemaProperties = [
-  'additionalItems', 'items', 'additionalProperties', 'dependencies', 'patternProperties', 'properties'
-];
-
-inferredProperties.number = inferredProperties.integer;
-
-function mayHaveType(obj, path, props) {
-  return Object.keys(obj).filter(function(prop) {
-    // Do not attempt to infer properties named as subschema containers.  The reason for this is
-    // that any property name within those containers that matches one of the properties used for inferring missing type
-    // values causes the container itself to get processed which leads to invalid output.  (Issue 62)
-    if (props.indexOf(prop) > -1 && subschemaProperties.indexOf(path[path.length - 1]) === -1) {
-      return true;
-    }
-  }).length > 0;
-}
-
-module.exports = function(obj, path) {
-  for (var type in inferredProperties) {
-    if (mayHaveType(obj, path, inferredProperties[type])) {
-      return type;
-    }
-  }
-};
-
-},{}],15:[function(require,module,exports){
-var merge;
-
-function clone(arr) {
-  var out = [];
-
-  arr.forEach(function(item, index) {
-    if (typeof item === 'object' && item !== null) {
-      out[index] = Array.isArray(item) ? clone(item) : merge({}, item);
-    } else {
-      out[index] = item;
-    }
-  });
-
-  return out;
-}
-
-merge = module.exports = function(a, b) {
-  for (var key in b) {
-    if (typeof b[key] !== 'object' || b[key] === null) {
-      a[key] = b[key];
-    } else if (Array.isArray(b[key])) {
-      a[key] = (a[key] || []).concat(clone(b[key]));
-    } else if (typeof a[key] !== 'object' || a[key] === null || Array.isArray(a[key])) {
-      a[key] = merge({}, b[key]);
-    } else {
-      a[key] = merge(a[key], b[key]);
-    }
-  }
-
-  return a;
-};
-
-},{}],16:[function(require,module,exports){
-module.exports = {
-  array: require('../types/array'),
-  boolean: require('../types/boolean'),
-  integer: require('../types/integer'),
-  number: require('../types/number'),
-  null: require('../types/null'),
-  object: require('../types/object'),
-  string: require('../types/string')
-};
-
-},{"../types/array":3,"../types/boolean":4,"../types/integer":5,"../types/null":6,"../types/number":7,"../types/object":8,"../types/string":9}],17:[function(require,module,exports){
-var random = module.exports = function(min, max, defMin, defMax) {
-  var hasPrecision = false;
-
-  if (typeof min === 'object') {
-    hasPrecision = min.hasPrecision;
-    max = min.max;
-    defMin = min.defMin;
-    defMax = min.defMax;
-    min = min.min;
-  }
-
-  defMin = typeof defMin === 'undefined' ? random.MIN_NUMBER : defMin;
-  defMax = typeof defMax === 'undefined' ? random.MAX_NUMBER : defMax;
-
-  min = typeof min === 'undefined' ? defMin : min;
-  max = typeof max === 'undefined' ? defMax : max;
-
-  if (max < min) {
-    max += min;
-  }
-
-  var number = Math.random() * (max - min) + min;
-
-  if (!hasPrecision) {
-    return parseInt(number, 10);
-  }
-
-  return number;
-};
-
-random.shuffle = function(obj) {
-  var copy = obj.slice(),
-      length = obj.length;
-
-  for (; length > 0;) {
-    var key = Math.floor(Math.random() * length),
-        tmp = copy[--length];
-
-    copy[length] = copy[key];
-    copy[key] = tmp;
-  }
-
-  return copy;
-};
-
-random.pick = function(obj) {
-  return obj[Math.floor(Math.random() * obj.length)];
-};
-
-random.MIN_NUMBER = -100;
-random.MAX_NUMBER = 100;
-
-},{}],18:[function(require,module,exports){
-var random = require('./random');
-
-var ParseError = require('./error');
-
-var inferredType = require('./inferred');
-
-var primitives = null;
-
-function traverse(obj, path, resolve) {
-  resolve(obj);
-
-  var copy = {};
-
-  if (Array.isArray(obj)) {
-    copy = [];
-  }
-
-  if (Array.isArray(obj.enum)) {
-    return random.pick(obj.enum);
-  }
-
-  var type = obj.type;
-
-  if (Array.isArray(type)) {
-    type = random.pick(type);
-  } else if (typeof type === 'undefined') {
-    // Attempt to infer the type
-    type = inferredType(obj, path) || type;
-  }
-
-  if (typeof type === 'string') {
-    if (!primitives[type]) {
-      throw new ParseError('unknown primitive ' + JSON.stringify(type), path.concat(['type']));
-    }
-
-    try {
-      return primitives[type](obj, path, resolve);
-    } catch (e) {
-      if (typeof e.path === 'undefined') {
-        throw new ParseError(e.message, path);
-      }
-
-      throw e;
-    }
-  }
-
-  for (var prop in obj) {
-    if (typeof obj[prop] === 'object' && prop !== 'definitions') {
-      copy[prop] = traverse(obj[prop], path.concat([prop]), resolve);
-    } else {
-      copy[prop] = obj[prop];
-    }
-  }
-
-  return copy;
-}
-
-module.exports = function() {
-  primitives = primitives || require('./primitives');
-
-  return traverse.apply(null, arguments);
-};
-
-},{"./error":11,"./inferred":14,"./primitives":16,"./random":17}],19:[function(require,module,exports){
-var random = require('./random');
-
-var LIPSUM_WORDS = ('Lorem ipsum dolor sit amet consectetur adipisicing elit sed do eiusmod tempor incididunt ut labore'
-  + ' et dolore magna aliqua Ut enim ad minim veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea'
-  + ' commodo consequat Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla'
-  + ' pariatur Excepteur sint occaecat cupidatat non proident sunt in culpa qui officia deserunt mollit anim id est'
-  + ' laborum').split(' ');
-
-module.exports = function(min, max) {
-  var words = random.shuffle(LIPSUM_WORDS),
-      length = random(min || 1, Math.min(LIPSUM_WORDS.length, max || min || 5));
-
-  return words.slice(0, length);
-};
-
-},{"./random":17}],20:[function(require,module,exports){
-//  Chance.js 1.0.0
+//  Chance.js 1.0.1
 //  http://chancejs.com
 //  (c) 2013 Victor Quinn
 //  Chance may be freely distributed or modified under the MIT license.
@@ -800,7 +63,7 @@ module.exports = function(min, max) {
         return this;
     }
 
-    Chance.prototype.VERSION = "1.0.0";
+    Chance.prototype.VERSION = "1.0.1";
 
     // Random helper functions
     function initOptions(options, defaults) {
@@ -1583,6 +846,16 @@ module.exports = function(min, max) {
         return options.full ?
             this.pick(this.name_suffixes()).name :
             this.pick(this.name_suffixes()).abbreviation;
+    };
+
+    Chance.prototype.nationalities = function () {
+        return this.get("nationalities");
+    };
+
+    // Generate random nationality based on json list
+    Chance.prototype.nationality = function () {
+        var nationality = this.pick(this.nationalities());
+        return nationality.name;
     };
 
     // -- End Person --
@@ -2615,7 +1888,7 @@ module.exports = function(min, max) {
         var fileExtention;
 
         // Generate random file name 
-        fileName = chance.word({length : fileOptions.length});
+        fileName = this.word({length : fileOptions.length});
 
         // Generate file by specific extention provided by the user
         if(fileOptions.extention) {
@@ -2701,6 +1974,203 @@ module.exports = function(min, max) {
             {name: 'Northwest Territories', abbreviation: 'NT'},
             {name: 'Nunavut', abbreviation: 'NU'},
             {name: 'Yukon', abbreviation: 'YT'}
+        ],
+
+            // from: https://github.com/samsargent/Useful-Autocomplete-Data/blob/master/data/nationalities.json
+        nationalities: [
+           {name: 'Afghan'},
+           {name: 'Albanian'},
+           {name: 'Algerian'},
+           {name: 'American'},
+           {name: 'Andorran'},
+           {name: 'Angolan'},
+           {name: 'Antiguans'},
+           {name: 'Argentinean'},
+           {name: 'Armenian'},
+           {name: 'Australian'},
+           {name: 'Austrian'},
+           {name: 'Azerbaijani'},
+           {name: 'Bahami'},
+           {name: 'Bahraini'},
+           {name: 'Bangladeshi'},
+           {name: 'Barbadian'},
+           {name: 'Barbudans'},
+           {name: 'Batswana'},
+           {name: 'Belarusian'},
+           {name: 'Belgian'},
+           {name: 'Belizean'},
+           {name: 'Beninese'},
+           {name: 'Bhutanese'},
+           {name: 'Bolivian'},
+           {name: 'Bosnian'},
+           {name: 'Brazilian'},
+           {name: 'British'},
+           {name: 'Bruneian'},
+           {name: 'Bulgarian'},
+           {name: 'Burkinabe'},
+           {name: 'Burmese'},
+           {name: 'Burundian'},
+           {name: 'Cambodian'},
+           {name: 'Cameroonian'},
+           {name: 'Canadian'},
+           {name: 'Cape Verdean'},
+           {name: 'Central African'},
+           {name: 'Chadian'},
+           {name: 'Chilean'},
+           {name: 'Chinese'},
+           {name: 'Colombian'},
+           {name: 'Comoran'},
+           {name: 'Congolese'},
+           {name: 'Costa Rican'},
+           {name: 'Croatian'},
+           {name: 'Cuban'},
+           {name: 'Cypriot'},
+           {name: 'Czech'},
+           {name: 'Danish'},
+           {name: 'Djibouti'},
+           {name: 'Dominican'},
+           {name: 'Dutch'},
+           {name: 'East Timorese'},
+           {name: 'Ecuadorean'},
+           {name: 'Egyptian'},
+           {name: 'Emirian'},
+           {name: 'Equatorial Guinean'},
+           {name: 'Eritrean'},
+           {name: 'Estonian'},
+           {name: 'Ethiopian'},
+           {name: 'Fijian'},
+           {name: 'Filipino'},
+           {name: 'Finnish'},
+           {name: 'French'},
+           {name: 'Gabonese'},
+           {name: 'Gambian'},
+           {name: 'Georgian'},
+           {name: 'German'},
+           {name: 'Ghanaian'},
+           {name: 'Greek'},
+           {name: 'Grenadian'},
+           {name: 'Guatemalan'},
+           {name: 'Guinea-Bissauan'},
+           {name: 'Guinean'},
+           {name: 'Guyanese'},
+           {name: 'Haitian'},
+           {name: 'Herzegovinian'},
+           {name: 'Honduran'},
+           {name: 'Hungarian'},
+           {name: 'I-Kiribati'},
+           {name: 'Icelander'},
+           {name: 'Indian'},
+           {name: 'Indonesian'},
+           {name: 'Iranian'},
+           {name: 'Iraqi'},
+           {name: 'Irish'},
+           {name: 'Israeli'},
+           {name: 'Italian'},
+           {name: 'Ivorian'},
+           {name: 'Jamaican'},
+           {name: 'Japanese'},
+           {name: 'Jordanian'},
+           {name: 'Kazakhstani'},
+           {name: 'Kenyan'},
+           {name: 'Kittian and Nevisian'},
+           {name: 'Kuwaiti'},
+           {name: 'Kyrgyz'},
+           {name: 'Laotian'},
+           {name: 'Latvian'},
+           {name: 'Lebanese'},
+           {name: 'Liberian'},
+           {name: 'Libyan'},
+           {name: 'Liechtensteiner'},
+           {name: 'Lithuanian'},
+           {name: 'Luxembourger'},
+           {name: 'Macedonian'},
+           {name: 'Malagasy'},
+           {name: 'Malawian'},
+           {name: 'Malaysian'},
+           {name: 'Maldivan'},
+           {name: 'Malian'},
+           {name: 'Maltese'},
+           {name: 'Marshallese'},
+           {name: 'Mauritanian'},
+           {name: 'Mauritian'},
+           {name: 'Mexican'},
+           {name: 'Micronesian'},
+           {name: 'Moldovan'},
+           {name: 'Monacan'},
+           {name: 'Mongolian'},
+           {name: 'Moroccan'},
+           {name: 'Mosotho'},
+           {name: 'Motswana'},
+           {name: 'Mozambican'},
+           {name: 'Namibian'},
+           {name: 'Nauruan'},
+           {name: 'Nepalese'},
+           {name: 'New Zealander'},
+           {name: 'Nicaraguan'},
+           {name: 'Nigerian'},
+           {name: 'Nigerien'},
+           {name: 'North Korean'},
+           {name: 'Northern Irish'},
+           {name: 'Norwegian'},
+           {name: 'Omani'},
+           {name: 'Pakistani'},
+           {name: 'Palauan'},
+           {name: 'Panamanian'},
+           {name: 'Papua New Guinean'},
+           {name: 'Paraguayan'},
+           {name: 'Peruvian'},
+           {name: 'Polish'},
+           {name: 'Portuguese'},
+           {name: 'Qatari'},
+           {name: 'Romani'},          
+           {name: 'Russian'},
+           {name: 'Rwandan'},
+           {name: 'Saint Lucian'},
+           {name: 'Salvadoran'},
+           {name: 'Samoan'},
+           {name: 'San Marinese'},
+           {name: 'Sao Tomean'},
+           {name: 'Saudi'},
+           {name: 'Scottish'},
+           {name: 'Senegalese'},
+           {name: 'Serbian'},
+           {name: 'Seychellois'},
+           {name: 'Sierra Leonean'},
+           {name: 'Singaporean'},
+           {name: 'Slovakian'},
+           {name: 'Slovenian'},
+           {name: 'Solomon Islander'},
+           {name: 'Somali'},
+           {name: 'South African'},
+           {name: 'South Korean'},
+           {name: 'Spanish'},
+           {name: 'Sri Lankan'},
+           {name: 'Sudanese'},
+           {name: 'Surinamer'},
+           {name: 'Swazi'},
+           {name: 'Swedish'},
+           {name: 'Swiss'},
+           {name: 'Syrian'},
+           {name: 'Taiwanese'},
+           {name: 'Tajik'},
+           {name: 'Tanzanian'},
+           {name: 'Thai'},
+           {name: 'Togolese'},
+           {name: 'Tongan'},
+           {name: 'Trinidadian or Tobagonian'},
+           {name: 'Tunisian'},
+           {name: 'Turkish'},
+           {name: 'Tuvaluan'},
+           {name: 'Ugandan'},
+           {name: 'Ukrainian'},
+           {name: 'Uruguaya'},
+           {name: 'Uzbekistani'},
+           {name: 'Venezuela'},
+           {name: 'Vietnamese'},
+           {name: 'Wels'},
+           {name: 'Yemenit'},
+           {name: 'Zambia'},
+           {name: 'Zimbabwe'},
         ],
 
         us_states_and_dc: [
@@ -3618,7 +3088,7 @@ module.exports = function(min, max) {
     }
 })();
 
-},{}],21:[function(require,module,exports){
+},{}],2:[function(require,module,exports){
 'use strict';
 
 var $ = require('./util/uri-helpers');
@@ -3692,7 +3162,7 @@ var instance = module.exports = function() {
 
 instance.util = $;
 
-},{"./util/find-reference":23,"./util/normalize-schema":24,"./util/resolve-schema":25,"./util/uri-helpers":26}],22:[function(require,module,exports){
+},{"./util/find-reference":4,"./util/normalize-schema":5,"./util/resolve-schema":6,"./util/uri-helpers":7}],3:[function(require,module,exports){
 'use strict';
 
 var clone = module.exports = function(obj, seen) {
@@ -3727,7 +3197,7 @@ var clone = module.exports = function(obj, seen) {
   return target;
 };
 
-},{}],23:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
 'use strict';
 
 var $ = require('./uri-helpers');
@@ -3775,7 +3245,7 @@ var find = module.exports = function(id, refs) {
   return target;
 };
 
-},{"./uri-helpers":26}],24:[function(require,module,exports){
+},{"./uri-helpers":7}],5:[function(require,module,exports){
 'use strict';
 
 var $ = require('./uri-helpers');
@@ -3840,7 +3310,7 @@ module.exports = function(fakeroot, schema, push) {
   return copy;
 };
 
-},{"./clone-obj":22,"./uri-helpers":26}],25:[function(require,module,exports){
+},{"./clone-obj":3,"./uri-helpers":7}],6:[function(require,module,exports){
 'use strict';
 
 var $ = require('./uri-helpers');
@@ -3887,7 +3357,7 @@ module.exports = function(obj, refs, resolve) {
   return copy(obj, refs, parent, resolve);
 };
 
-},{"./find-reference":23,"./uri-helpers":26,"deep-extend":27}],26:[function(require,module,exports){
+},{"./find-reference":4,"./uri-helpers":7,"deep-extend":8}],7:[function(require,module,exports){
 'use strict';
 
 // https://gist.github.com/pjt33/efb2f1134bab986113fd
@@ -3991,7 +3461,7 @@ module.exports = {
   getDocumentURI: getDocumentURI
 };
 
-},{}],27:[function(require,module,exports){
+},{}],8:[function(require,module,exports){
 /*!
  * @description Recursive object extending
  * @author Viacheslav Lotsmanov <lotsmanov89@gmail.com>
@@ -4137,16 +3607,27 @@ var deepExtend = module.exports = function (/*obj_1, [obj_2], [obj_N]*/) {
 	return target;
 }
 
-},{}],28:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 // since we are requiring the top level of faker, load all locales by default
 var Faker = require('./lib');
 var faker = new Faker({ locales: require('./lib/locales') });
 module['exports'] = faker;
-},{"./lib":38,"./lib/locales":40}],29:[function(require,module,exports){
+},{"./lib":19,"./lib/locales":21}],10:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.address
+ */
 function Address (faker) {
   var f = faker.fake,
       Helpers = faker.helpers;
 
+  /**
+   * Generates random zipcode from format. If format is not specified, the
+   * locale's zip format is used.
+   *
+   * @method faker.address.zipCode
+   * @param {String} format
+   */
   this.zipCode = function(format) {
     // if zip format is not specified, use the zip format defined for the locale
     if (typeof format === 'undefined') {
@@ -4160,12 +3641,27 @@ function Address (faker) {
     return Helpers.replaceSymbols(format);
   }
 
+  /**
+   * Generates a random localized city name. The format string can contain any
+   * method provided by faker wrapped in `{{}}`, e.g. `{{name.firstName}}` in
+   * order to build the city name.
+   *
+   * If no format string is provided one of the following is randomly used:
+   * 
+   * * `{{address.cityPrefix}} {{name.firstName}}{{address.citySuffix}}`
+   * * `{{address.cityPrefix}} {{name.firstName}}`
+   * * `{{name.firstName}}{{address.citySuffix}}`
+   * * `{{name.lastName}}{{address.citySuffix}}`
+   *
+   * @method faker.address.city
+   * @param {String} format
+   */
   this.city = function (format) {
     var formats = [
-      '{{address.cityPrefix}} {{name.firstName}} {{address.citySuffix}}',
+      '{{address.cityPrefix}} {{name.firstName}}{{address.citySuffix}}',
       '{{address.cityPrefix}} {{name.firstName}}',
-      '{{name.firstName}} {{address.citySuffix}}',
-      '{{name.lastName}} {{address.citySuffix}}'
+      '{{name.firstName}}{{address.citySuffix}}',
+      '{{name.lastName}}{{address.citySuffix}}'
     ];
 
     if (typeof format !== "number") {
@@ -4176,14 +3672,28 @@ function Address (faker) {
 
   }
 
+  /**
+   * Return a random localized city prefix
+   * @method faker.address.cityPrefix
+   */
   this.cityPrefix = function () {
     return faker.random.arrayElement(faker.definitions.address.city_prefix);
   }
 
+  /**
+   * Return a random localized city suffix
+   *
+   * @method faker.address.citySuffix
+   */
   this.citySuffix = function () {
     return faker.random.arrayElement(faker.definitions.address.city_suffix);
   }
 
+  /**
+   * Returns a random localized street name
+   *
+   * @method faker.address.streetName
+   */
   this.streetName = function () {
       var result;
       var suffix = faker.address.streetSuffix();
@@ -4205,6 +3715,12 @@ function Address (faker) {
   //
   // TODO: change all these methods that accept a boolean to instead accept an options hash.
   //
+  /**
+   * Returns a random localized street address
+   *
+   * @method faker.address.streetAddress
+   * @param {Boolean} useFullAddress
+   */
   this.streetAddress = function (useFullAddress) {
       if (useFullAddress === undefined) { useFullAddress = false; }
       var address = "";
@@ -4222,14 +3738,29 @@ function Address (faker) {
       return useFullAddress ? (address + " " + faker.address.secondaryAddress()) : address;
   }
 
+  /**
+   * streetSuffix
+   *
+   * @method faker.address.streetSuffix
+   */
   this.streetSuffix = function () {
       return faker.random.arrayElement(faker.definitions.address.street_suffix);
   }
   
+  /**
+   * streetPrefix
+   *
+   * @method faker.address.streetPrefix
+   */
   this.streetPrefix = function () {
       return faker.random.arrayElement(faker.definitions.address.street_prefix);
   }
 
+  /**
+   * secondaryAddress
+   *
+   * @method faker.address.secondaryAddress
+   */
   this.secondaryAddress = function () {
       return Helpers.replaceSymbolWithNumber(faker.random.arrayElement(
           [
@@ -4239,30 +3770,66 @@ function Address (faker) {
       ));
   }
 
+  /**
+   * county
+   *
+   * @method faker.address.county
+   */
   this.county = function () {
     return faker.random.arrayElement(faker.definitions.address.county);
   }
 
+  /**
+   * country
+   *
+   * @method faker.address.country
+   */
   this.country = function () {
     return faker.random.arrayElement(faker.definitions.address.country);
   }
 
+  /**
+   * countryCode
+   *
+   * @method faker.address.countryCode
+   */
   this.countryCode = function () {
     return faker.random.arrayElement(faker.definitions.address.country_code);
   }
 
+  /**
+   * state
+   *
+   * @method faker.address.state
+   * @param {Boolean} useAbbr
+   */
   this.state = function (useAbbr) {
       return faker.random.arrayElement(faker.definitions.address.state);
   }
 
+  /**
+   * stateAbbr
+   *
+   * @method faker.address.stateAbbr
+   */
   this.stateAbbr = function () {
       return faker.random.arrayElement(faker.definitions.address.state_abbr);
   }
 
+  /**
+   * latitude
+   *
+   * @method faker.address.latitude
+   */
   this.latitude = function () {
       return (faker.random.number(180 * 10000) / 10000.0 - 90.0).toFixed(4);
   }
 
+  /**
+   * longitude
+   *
+   * @method faker.address.longitude
+   */
   this.longitude = function () {
       return (faker.random.number(360 * 10000) / 10000.0 - 180.0).toFixed(4);
   }
@@ -4273,41 +3840,54 @@ function Address (faker) {
 
 module.exports = Address;
 
-},{}],30:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.commerce
+ */
 var Commerce = function (faker) {
   var self = this;
 
+  /**
+   * color
+   *
+   * @method faker.commerce.color
+   */
   self.color = function() {
       return faker.random.arrayElement(faker.definitions.commerce.color);
   };
 
+  /**
+   * department
+   *
+   * @method faker.commerce.department
+   * @param {number} max
+   * @param {number} fixedAmount
+   */
   self.department = function(max, fixedAmount) {
-    
       return faker.random.arrayElement(faker.definitions.commerce.department);
-      /*
-      max = max || 3;
-
-      var num = Math.floor((Math.random() * max) + 1);
-      if (fixedAmount) {
-          num = max;
-      }
-
-      var categories = faker.commerce.categories(num);
-
-      if(num > 1) {
-          return faker.commerce.mergeCategories(categories);
-      }
-
-      return categories[0];
-      */
   };
 
+  /**
+   * productName
+   *
+   * @method faker.commerce.productName
+   */
   self.productName = function() {
       return faker.commerce.productAdjective() + " " +
               faker.commerce.productMaterial() + " " +
               faker.commerce.product();
   };
 
+  /**
+   * price
+   *
+   * @method faker.commerce.price
+   * @param {number} min
+   * @param {number} max
+   * @param {number} dec
+   * @param {string} symbol
+   */
   self.price = function(min, max, dec, symbol) {
       min = min || 0;
       max = max || 1000;
@@ -4318,7 +3898,9 @@ var Commerce = function (faker) {
           return symbol + 0.00;
       }
 
-      return symbol + (Math.round((Math.random() * (max - min) + min) * Math.pow(10, dec)) / Math.pow(10, dec)).toFixed(dec);
+      var randValue = faker.random.number({ max: max, min: min });
+
+      return symbol + (Math.round(randValue * Math.pow(10, dec)) / Math.pow(10, dec)).toFixed(dec);
   };
 
   /*
@@ -4347,14 +3929,29 @@ var Commerce = function (faker) {
   };
   */
 
+  /**
+   * productAdjective
+   *
+   * @method faker.commerce.productAdjective
+   */
   self.productAdjective = function() {
       return faker.random.arrayElement(faker.definitions.commerce.product_name.adjective);
   };
 
+  /**
+   * productMaterial
+   *
+   * @method faker.commerce.productMaterial
+   */
   self.productMaterial = function() {
       return faker.random.arrayElement(faker.definitions.commerce.product_name.material);
   };
 
+  /**
+   * product
+   *
+   * @method faker.commerce.product
+   */
   self.product = function() {
       return faker.random.arrayElement(faker.definitions.commerce.product_name.product);
   }
@@ -4363,17 +3960,33 @@ var Commerce = function (faker) {
 };
 
 module['exports'] = Commerce;
-},{}],31:[function(require,module,exports){
+
+},{}],12:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.company
+ */
 var Company = function (faker) {
   
   var self = this;
   var f = faker.fake;
   
+  /**
+   * suffixes
+   *
+   * @method faker.company.suffixes
+   */
   this.suffixes = function () {
     // Don't want the source array exposed to modification, so return a copy
     return faker.definitions.company.suffix.slice(0);
   }
 
+  /**
+   * companyName
+   *
+   * @method faker.company.companyName
+   * @param {string} format
+   */
   this.companyName = function (format) {
 
     var formats = [
@@ -4389,38 +4002,83 @@ var Company = function (faker) {
     return f(formats[format]);
   }
 
+  /**
+   * companySuffix
+   *
+   * @method faker.company.companySuffix
+   */
   this.companySuffix = function () {
       return faker.random.arrayElement(faker.company.suffixes());
   }
 
+  /**
+   * catchPhrase
+   *
+   * @method faker.company.catchPhrase
+   */
   this.catchPhrase = function () {
     return f('{{company.catchPhraseAdjective}} {{company.catchPhraseDescriptor}} {{company.catchPhraseNoun}}')
   }
 
+  /**
+   * bs
+   *
+   * @method faker.company.bs
+   */
   this.bs = function () {
     return f('{{company.bsAdjective}} {{company.bsBuzz}} {{company.bsNoun}}');
   }
 
+  /**
+   * catchPhraseAdjective
+   *
+   * @method faker.company.catchPhraseAdjective
+   */
   this.catchPhraseAdjective = function () {
       return faker.random.arrayElement(faker.definitions.company.adjective);
   }
 
+  /**
+   * catchPhraseDescriptor
+   *
+   * @method faker.company.catchPhraseDescriptor
+   */
   this.catchPhraseDescriptor = function () {
       return faker.random.arrayElement(faker.definitions.company.descriptor);
   }
 
+  /**
+   * catchPhraseNoun
+   *
+   * @method faker.company.catchPhraseNoun
+   */
   this.catchPhraseNoun = function () {
       return faker.random.arrayElement(faker.definitions.company.noun);
   }
 
+  /**
+   * bsAdjective
+   *
+   * @method faker.company.bsAdjective
+   */
   this.bsAdjective = function () {
       return faker.random.arrayElement(faker.definitions.company.bs_adjective);
   }
 
+  /**
+   * bsBuzz
+   *
+   * @method faker.company.bsBuzz
+   */
   this.bsBuzz = function () {
       return faker.random.arrayElement(faker.definitions.company.bs_verb);
   }
 
+  /**
+   * bsNoun
+   *
+   * @method faker.company.bsNoun
+   */
   this.bsNoun = function () {
       return faker.random.arrayElement(faker.definitions.company.bs_noun);
   }
@@ -4428,9 +4086,20 @@ var Company = function (faker) {
 }
 
 module['exports'] = Company;
-},{}],32:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.date
+ */
 var _Date = function (faker) {
   var self = this;
+  /**
+   * past
+   *
+   * @method faker.date.past
+   * @param {number} years
+   * @param {date} refDate
+   */
   self.past = function (years, refDate) {
       var date = (refDate) ? new Date(Date.parse(refDate)) : new Date();
       var range = {
@@ -4445,6 +4114,13 @@ var _Date = function (faker) {
       return date;
   };
 
+  /**
+   * future
+   *
+   * @method faker.date.future
+   * @param {number} years
+   * @param {date} refDate
+   */
   self.future = function (years, refDate) {
       var date = (refDate) ? new Date(Date.parse(refDate)) : new Date();
       var range = {
@@ -4459,6 +4135,13 @@ var _Date = function (faker) {
       return date;
   };
 
+  /**
+   * between
+   *
+   * @method faker.date.between
+   * @param {date} from
+   * @param {date} to
+   */
   self.between = function (from, to) {
       var fromMilli = Date.parse(from);
       var dateOffset = faker.random.number(Date.parse(to) - fromMilli);
@@ -4468,6 +4151,12 @@ var _Date = function (faker) {
       return newDate;
   };
 
+  /**
+   * recent
+   *
+   * @method faker.date.recent
+   * @param {number} days
+   */
   self.recent = function (days) {
       var date = new Date();
       var range = {
@@ -4482,6 +4171,12 @@ var _Date = function (faker) {
       return date;
   };
 
+  /**
+   * month
+   *
+   * @method faker.date.month
+   * @param {object} options
+   */
   self.month = function (options) {
       options = options || {};
 
@@ -4498,6 +4193,12 @@ var _Date = function (faker) {
       return faker.random.arrayElement(source);
   };
 
+  /**
+   * weekday
+   *
+   * @param {object} options
+   * @method faker.date.weekday
+   */
   self.weekday = function (options) {
       options = options || {};
 
@@ -4519,7 +4220,7 @@ var _Date = function (faker) {
 };
 
 module['exports'] = _Date;
-},{}],33:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 /*
   fake.js - generator method for combining faker methods based on string input
 
@@ -4527,6 +4228,23 @@ module['exports'] = _Date;
 
 function Fake (faker) {
   
+  /**
+   * Generator method for combining faker methods based on string input
+   *
+   * __Example:__
+   *
+   * ```
+   * console.log(faker.fake('{{name.lastName}}, {{name.firstName}} {{name.suffix}}'));
+   * //outputs: "Marks, Dean Sr."
+   * ```
+   *
+   * This will interpolate the format string with the value of methods
+   * [name.lastName]{@link faker.name.lastName}, [name.firstName]{@link faker.name.firstName},
+   * and [name.suffix]{@link faker.name.suffix}
+   *
+   * @method faker.fake
+   * @param {string} str
+   */
   this.fake = function fake (str) {
     // setup default response as empty string
     var res = '';
@@ -4550,11 +4268,19 @@ function Fake (faker) {
 
     // extract method name from between the {{ }} that we found
     // for example: {{name.firstName}}
-    var method = str.substr(start + 2,  end - start - 2);
-    method = method.replace('}}', '');
-    method = method.replace('{{', '');
+    var token = str.substr(start + 2,  end - start - 2);
+    var method = token.replace('}}', '').replace('{{', '');
 
     // console.log('method', method)
+
+    // extract method parameters
+    var regExp = /\(([^)]+)\)/;
+    var matches = regExp.exec(method);
+    var parameters = '';
+    if (matches) {
+      method = method.replace(regExp, '');
+      parameters = matches[1];
+    }
 
     // split the method into module and function
     var parts = method.split('.');
@@ -4570,8 +4296,28 @@ function Fake (faker) {
     // assign the function from the module.function namespace
     var fn = faker[parts[0]][parts[1]];
 
+    // If parameters are populated here, they are always going to be of string type
+    // since we might actually be dealing with an object or array,
+    // we always attempt to the parse the incoming parameters into JSON
+    var params;
+    // Note: we experience a small performance hit here due to JSON.parse try / catch
+    // If anyone actually needs to optimize this specific code path, please open a support issue on github
+    try {
+      params = JSON.parse(parameters)
+    } catch (err) {
+      // since JSON.parse threw an error, assume parameters was actually a string
+      params = parameters;
+    }
+
+    var result;
+    if (typeof params === "string" && params.length === 0) {
+      result = fn.call(this);
+    } else {
+      result = fn.call(this, params);
+    }
+
     // replace the found tag with the returned fake value
-    res = str.replace('{{' + method + '}}', fn());
+    res = str.replace('{{' + token + '}}', result);
 
     // return the response recursively until we are done finding all tags
     return fake(res);    
@@ -4583,11 +4329,21 @@ function Fake (faker) {
 }
 
 module['exports'] = Fake;
-},{}],34:[function(require,module,exports){
+},{}],15:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.finance
+ */
 var Finance = function (faker) {
   var Helpers = faker.helpers,
       self = this;
 
+  /**
+   * account
+   *
+   * @method faker.finance.account
+   * @param {number} length
+   */
   self.account = function (length) {
 
       length = length || 8;
@@ -4601,11 +4357,24 @@ var Finance = function (faker) {
       return Helpers.replaceSymbolWithNumber(template);
   }
 
+  /**
+   * accountName
+   *
+   * @method faker.finance.accountName
+   */
   self.accountName = function () {
 
       return [Helpers.randomize(faker.definitions.finance.account_type), 'Account'].join(' ');
   }
 
+  /**
+   * mask
+   *
+   * @method faker.finance.mask
+   * @param {number} length
+   * @param {boolean} parens
+   * @param {boolean} elipsis
+   */
   self.mask = function (length, parens, elipsis) {
 
 
@@ -4636,29 +4405,59 @@ var Finance = function (faker) {
   //min and max take in minimum and maximum amounts, dec is the decimal place you want rounded to, symbol is $, €, £, etc
   //NOTE: this returns a string representation of the value, if you want a number use parseFloat and no symbol
 
+  /**
+   * amount
+   *
+   * @method faker.finance.amount
+   * @param {number} min
+   * @param {number} max
+   * @param {number} dec
+   * @param {string} symbol
+   */
   self.amount = function (min, max, dec, symbol) {
 
       min = min || 0;
       max = max || 1000;
       dec = dec || 2;
       symbol = symbol || '';
+      var randValue = faker.random.number({ max: max, min: min });
 
-      return symbol + (Math.round((Math.random() * (max - min) + min) * Math.pow(10, dec)) / Math.pow(10, dec)).toFixed(dec);
+      return symbol + (Math.round(randValue * Math.pow(10, dec)) / Math.pow(10, dec)).toFixed(dec);
 
   }
 
+  /**
+   * transactionType
+   *
+   * @method faker.finance.transactionType
+   */
   self.transactionType = function () {
       return Helpers.randomize(faker.definitions.finance.transaction_type);
   }
 
+  /**
+   * currencyCode
+   *
+   * @method faker.finance.currencyCode
+   */
   self.currencyCode = function () {
       return faker.random.objectElement(faker.definitions.finance.currency)['code'];
   }
 
+  /**
+   * currencyName
+   *
+   * @method faker.finance.currencyName
+   */
   self.currencyName = function () {
       return faker.random.objectElement(faker.definitions.finance.currency, 'key');
   }
 
+  /**
+   * currencySymbol
+   *
+   * @method faker.finance.currencySymbol
+   */
   self.currencySymbol = function () {
       var symbol;
 
@@ -4667,41 +4466,92 @@ var Finance = function (faker) {
       }
       return symbol;
   }
+
+  /**
+   * bitcoinAddress
+   *
+   * @method  faker.finance.bitcoinAddress
+   */
+  self.bitcoinAddress = function () {
+    var addressLength = faker.random.number({ min: 27, max: 34 });
+
+    var address = faker.random.arrayElement(['1', '3']);
+
+    for (var i = 0; i < addressLength - 1; i++)
+      address += faker.random.alphaNumeric().toUpperCase();
+
+    return address;
+  }
 }
 
 module['exports'] = Finance;
-},{}],35:[function(require,module,exports){
+
+},{}],16:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.hacker
+ */
 var Hacker = function (faker) {
   var self = this;
   
+  /**
+   * abbreviation
+   *
+   * @method faker.hacker.abbreviation
+   */
   self.abbreviation = function () {
     return faker.random.arrayElement(faker.definitions.hacker.abbreviation);
   };
 
+  /**
+   * adjective
+   *
+   * @method faker.hacker.adjective
+   */
   self.adjective = function () {
     return faker.random.arrayElement(faker.definitions.hacker.adjective);
   };
 
+  /**
+   * noun
+   *
+   * @method faker.hacker.noun
+   */
   self.noun = function () {
     return faker.random.arrayElement(faker.definitions.hacker.noun);
   };
 
+  /**
+   * verb
+   *
+   * @method faker.hacker.verb
+   */
   self.verb = function () {
     return faker.random.arrayElement(faker.definitions.hacker.verb);
   };
 
+  /**
+   * ingverb
+   *
+   * @method faker.hacker.ingverb
+   */
   self.ingverb = function () {
     return faker.random.arrayElement(faker.definitions.hacker.ingverb);
   };
 
+  /**
+   * phrase
+   *
+   * @method faker.hacker.phrase
+   */
   self.phrase = function () {
 
     var data = {
-      abbreviation: self.abbreviation(),
-      adjective: self.adjective(),
-      ingverb: self.ingverb(),
-      noun: self.noun(),
-      verb: self.verb()
+      abbreviation: self.abbreviation,
+      adjective: self.adjective,
+      ingverb: self.ingverb,
+      noun: self.noun,
+      verb: self.verb
     };
 
     var phrase = faker.random.arrayElement([ "If we {{verb}} the {{noun}}, we can get to the {{abbreviation}} {{noun}} through the {{adjective}} {{abbreviation}} {{noun}}!",
@@ -4722,24 +4572,44 @@ var Hacker = function (faker) {
 };
 
 module['exports'] = Hacker;
-},{}],36:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.helpers
+ */
 var Helpers = function (faker) {
 
   var self = this;
 
-  // backword-compatibility
+  /**
+   * backword-compatibility
+   *
+   * @method faker.helpers.randomize
+   * @param {array} array
+   */
   self.randomize = function (array) {
       array = array || ["a", "b", "c"];
       return faker.random.arrayElement(array);
   };
 
-  // slugifies string
+  /**
+   * slugifies string
+   *
+   * @method faker.helpers.slugify
+   * @param {string} string
+   */
   self.slugify = function (string) {
       string = string || "";
       return string.replace(/ /g, '-').replace(/[^\w\.\-]+/g, '');
   };
 
-  // parses string for a symbol and replace it with a random number from 1-10
+  /**
+   * parses string for a symbol and replace it with a random number from 1-10
+   *
+   * @method faker.helpers.replaceSymbolWithNumber
+   * @param {string} string
+   * @param {string} symbol defaults to `"#"`
+   */
   self.replaceSymbolWithNumber = function (string, symbol) {
       string = string || "";
       // default symbol is '#'
@@ -4758,7 +4628,12 @@ var Helpers = function (faker) {
       return str;
   };
 
-  // parses string for symbols (numbers or letters) and replaces them appropriately
+  /**
+   * parses string for symbols (numbers or letters) and replaces them appropriately
+   *
+   * @method faker.helpers.replaceSymbols
+   * @param {string} string
+   */
   self.replaceSymbols = function (string) {
       string = string || "";
   	var alpha = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z']
@@ -4768,7 +4643,7 @@ var Helpers = function (faker) {
           if (string.charAt(i) == "#") {
               str += faker.random.number(9);
   		} else if (string.charAt(i) == "?") {
-  			str += alpha[Math.floor(Math.random() * alpha.length)];
+  			str += faker.random.arrayElement(alpha);
           } else {
               str += string.charAt(i);
           }
@@ -4776,13 +4651,25 @@ var Helpers = function (faker) {
       return str;
   };
 
-  // takes an array and returns it randomized
+  /**
+   * takes an array and returns it randomized
+   *
+   * @method faker.helpers.shuffle
+   * @param {array} o
+   */
   self.shuffle = function (o) {
       o = o || ["a", "b", "c"];
       for (var j, x, i = o.length-1; i; j = faker.random.number(i), x = o[--i], o[i] = o[j], o[j] = x);
       return o;
   };
 
+  /**
+   * mustache
+   *
+   * @method faker.helpers.mustache
+   * @param {string} str
+   * @param {object} data
+   */
   self.mustache = function (str, data) {
     if (typeof str === 'undefined') {
       return '';
@@ -4794,6 +4681,11 @@ var Helpers = function (faker) {
     return str;
   };
 
+  /**
+   * createCard
+   *
+   * @method faker.helpers.createCard
+   */
   self.createCard = function () {
       return {
           "name": faker.name.findName(),
@@ -4844,6 +4736,11 @@ var Helpers = function (faker) {
       };
   };
 
+  /**
+   * contextualCard
+   *
+   * @method faker.helpers.contextualCard
+   */
   self.contextualCard = function () {
     var name = faker.name.firstName(),
         userName = faker.internet.userName(name);
@@ -4874,6 +4771,11 @@ var Helpers = function (faker) {
   };
 
 
+  /**
+   * userCard
+   *
+   * @method faker.helpers.userCard
+   */
   self.userCard = function () {
       return {
           "name": faker.name.findName(),
@@ -4899,6 +4801,11 @@ var Helpers = function (faker) {
       };
   };
 
+  /**
+   * createTransaction
+   *
+   * @method faker.helpers.createTransaction
+   */
   self.createTransaction = function(){
     return {
       "amount" : faker.finance.amount(),
@@ -4909,9 +4816,9 @@ var Helpers = function (faker) {
       "account" : faker.finance.account()
     };
   };
-  
+
   return self;
-  
+
 };
 
 
@@ -4924,19 +4831,46 @@ String.prototype.capitalize = function () { //v1.0
 */
 
 module['exports'] = Helpers;
-},{}],37:[function(require,module,exports){
+
+},{}],18:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.image
+ */
 var Image = function (faker) {
 
   var self = this;
 
-  self.image = function () {
+  /**
+   * image
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.image
+   */
+  self.image = function (width, height, randomize) {
     var categories = ["abstract", "animals", "business", "cats", "city", "food", "nightlife", "fashion", "people", "nature", "sports", "technics", "transport"];
-    return self[faker.random.arrayElement(categories)]();
+    return self[faker.random.arrayElement(categories)](width, height, randomize);
   };
+  /**
+   * avatar
+   *
+   * @method faker.image.avatar
+   */
   self.avatar = function () {
     return faker.internet.avatar();
   };
-  self.imageUrl = function (width, height, category) {
+  /**
+   * imageUrl
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {string} category
+   * @param {boolean} randomize
+   * @method faker.image.imageUrl
+   */
+  self.imageUrl = function (width, height, category, randomize) {
       var width = width || 640;
       var height = height || 480;
 
@@ -4944,51 +4878,160 @@ var Image = function (faker) {
       if (typeof category !== 'undefined') {
         url += '/' + category;
       }
+
+      if (randomize) {
+        url += '?' + faker.random.number()
+      }
+
       return url;
   };
-  self.abstract = function (width, height) {
-    return faker.image.imageUrl(width, height, 'abstract');
+  /**
+   * abstract
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.abstract
+   */
+  self.abstract = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'abstract', randomize);
   };
-  self.animals = function (width, height) {
-    return faker.image.imageUrl(width, height, 'animals');
+  /**
+   * animals
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.animals
+   */
+  self.animals = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'animals', randomize);
   };
-  self.business = function (width, height) {
-    return faker.image.imageUrl(width, height, 'business');
+  /**
+   * business
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.business
+   */
+  self.business = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'business', randomize);
   };
-  self.cats = function (width, height) {
-    return faker.image.imageUrl(width, height, 'cats');
+  /**
+   * cats
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.cats
+   */
+  self.cats = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'cats', randomize);
   };
-  self.city = function (width, height) {
-    return faker.image.imageUrl(width, height, 'city');
+  /**
+   * city
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.city
+   */
+  self.city = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'city', randomize);
   };
-  self.food = function (width, height) {
-    return faker.image.imageUrl(width, height, 'food');
+  /**
+   * food
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.food
+   */
+  self.food = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'food', randomize);
   };
-  self.nightlife = function (width, height) {
-    return faker.image.imageUrl(width, height, 'nightlife');
+  /**
+   * nightlife
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.nightlife
+   */
+  self.nightlife = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'nightlife', randomize);
   };
-  self.fashion = function (width, height) {
-    return faker.image.imageUrl(width, height, 'fashion');
+  /**
+   * fashion
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.fashion
+   */
+  self.fashion = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'fashion', randomize);
   };
-  self.people = function (width, height) {
-    return faker.image.imageUrl(width, height, 'people');
+  /**
+   * people
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.people
+   */
+  self.people = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'people', randomize);
   };
-  self.nature = function (width, height) {
-    return faker.image.imageUrl(width, height, 'nature');
+  /**
+   * nature
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.nature
+   */
+  self.nature = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'nature', randomize);
   };
-  self.sports = function (width, height) {
-    return faker.image.imageUrl(width, height, 'sports');
+  /**
+   * sports
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.sports
+   */
+  self.sports = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'sports', randomize);
   };
-  self.technics = function (width, height) {
-    return faker.image.imageUrl(width, height, 'technics');
+  /**
+   * technics
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.technics
+   */
+  self.technics = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'technics', randomize);
   };
-  self.transport = function (width, height) {
-    return faker.image.imageUrl(width, height, 'transport');
+  /**
+   * transport
+   *
+   * @param {number} width
+   * @param {number} height
+   * @param {boolean} randomize
+   * @method faker.image.transport
+   */
+  self.transport = function (width, height, randomize) {
+    return faker.image.imageUrl(width, height, 'transport', randomize);
   }  
 }
 
 module["exports"] = Image;
-},{}],38:[function(require,module,exports){
+},{}],19:[function(require,module,exports){
 /*
 
    this index.js file is used for including the faker library as a CommonJS module, instead of a bundle
@@ -5008,6 +5051,10 @@ module["exports"] = Image;
 
 */
 
+/**
+ *
+ * @namespace faker
+ */
 function Faker (opts) {
 
   var self = this;
@@ -5069,7 +5116,8 @@ function Faker (opts) {
   var Commerce = require('./commerce');
   self.commerce = new Commerce(self);
 
-  // TODO: fix self.commerce = require('./commerce');
+  var System = require('./system');
+  self.system = new System(self);
 
   var _definitions = {
     "name": ["first_name", "last_name", "prefix", "suffix", "title", "male_first_name", "female_first_name", "male_middle_name", "female_middle_name", "male_last_name", "female_last_name"],
@@ -5079,8 +5127,9 @@ function Faker (opts) {
     "hacker": ["abbreviation", "adjective", "noun", "verb", "ingverb"],
     "phone_number": ["formats"],
     "finance": ["account_type", "transaction_type", "currency"],
-    "internet": ["avatar_uri", "domain_suffix", "free_email", "password"],
+    "internet": ["avatar_uri", "domain_suffix", "free_email", "example_email", "password"],
     "commerce": ["color", "department", "product_name", "price", "categories"],
+    "system": ["mimeTypes"],
     "date": ["month", "weekday"],
     "title": "",
     "separator": ""
@@ -5123,21 +5172,83 @@ Faker.prototype.seed = function(value) {
 }
 module['exports'] = Faker;
 
-},{"./address":29,"./commerce":30,"./company":31,"./date":32,"./fake":33,"./finance":34,"./hacker":35,"./helpers":36,"./image":37,"./internet":39,"./lorem":938,"./name":939,"./phone_number":940,"./random":941}],39:[function(require,module,exports){
+},{"./address":10,"./commerce":11,"./company":12,"./date":13,"./fake":14,"./finance":15,"./hacker":16,"./helpers":17,"./image":18,"./internet":20,"./lorem":962,"./name":963,"./phone_number":964,"./random":965,"./system":966}],20:[function(require,module,exports){
 var password_generator = require('../vendor/password-generator.js'),
     random_ua = require('../vendor/user-agent');
 
+/**
+ *
+ * @namespace faker.internet
+ */
 var Internet = function (faker) {
   var self = this;
+  /**
+   * avatar
+   *
+   * @method faker.internet.avatar
+   */
   self.avatar = function () {
       return faker.random.arrayElement(faker.definitions.internet.avatar_uri);
   };
 
+  self.avatar.schema = {
+    "description": "Generates a URL for an avatar.",
+    "sampleResults": ["https://s3.amazonaws.com/uifaces/faces/twitter/igorgarybaldi/128.jpg"]
+  };
+
+  /**
+   * email
+   *
+   * @method faker.internet.email
+   * @param {string} firstName
+   * @param {string} lastName
+   * @param {string} provider
+   */
   self.email = function (firstName, lastName, provider) {
       provider = provider || faker.random.arrayElement(faker.definitions.internet.free_email);
       return  faker.helpers.slugify(faker.internet.userName(firstName, lastName)) + "@" + provider;
   };
 
+  self.email.schema = {
+    "description": "Generates a valid email address based on optional input criteria",
+    "sampleResults": ["foo.bar@gmail.com"],
+    "properties": {
+      "firstName": {
+        "type": "string",
+        "required": false,
+        "description": "The first name of the user"
+      },
+      "lastName": {
+        "type": "string",
+        "required": false,
+        "description": "The last name of the user"
+      },
+      "provider": {
+        "type": "string",
+        "required": false,
+        "description": "The domain of the user"
+      }
+    }
+  };
+  /**
+   * exampleEmail
+   *
+   * @method faker.internet.exampleEmail
+   * @param {string} firstName
+   * @param {string} lastName
+   */
+  self.exampleEmail = function (firstName, lastName) {
+      var provider = faker.random.arrayElement(faker.definitions.internet.example_email);
+      return self.email(firstName, lastName, provider);
+  };
+
+  /**
+   * userName
+   *
+   * @method faker.internet.userName
+   * @param {string} firstName
+   * @param {string} lastName
+   */
   self.userName = function (firstName, lastName) {
       var result;
       firstName = firstName || faker.name.firstName();
@@ -5158,27 +5269,108 @@ var Internet = function (faker) {
       return result;
   };
 
+  self.userName.schema = {
+    "description": "Generates a username based on one of several patterns. The pattern is chosen randomly.",
+    "sampleResults": [
+      "Kirstin39",
+      "Kirstin.Smith",
+      "Kirstin.Smith39",
+      "KirstinSmith",
+      "KirstinSmith39",
+    ],
+    "properties": {
+      "firstName": {
+        "type": "string",
+        "required": false,
+        "description": "The first name of the user"
+      },
+      "lastName": {
+        "type": "string",
+        "required": false,
+        "description": "The last name of the user"
+      }
+    }
+  };
+
+  /**
+   * protocol
+   *
+   * @method faker.internet.protocol
+   */
   self.protocol = function () {
       var protocols = ['http','https'];
       return faker.random.arrayElement(protocols);
   };
 
+  self.protocol.schema = {
+    "description": "Randomly generates http or https",
+    "sampleResults": ["https", "http"]
+  };
+
+  /**
+   * url
+   *
+   * @method faker.internet.url
+   */
   self.url = function () {
       return faker.internet.protocol() + '://' + faker.internet.domainName();
   };
 
+  self.url.schema = {
+    "description": "Generates a random URL. The URL could be secure or insecure.",
+    "sampleResults": [
+      "http://rashawn.name",
+      "https://rashawn.name"
+    ]
+  };
+
+  /**
+   * domainName
+   *
+   * @method faker.internet.domainName
+   */
   self.domainName = function () {
       return faker.internet.domainWord() + "." + faker.internet.domainSuffix();
   };
 
+  self.domainName.schema = {
+    "description": "Generates a random domain name.",
+    "sampleResults": ["marvin.org"]
+  };
+
+  /**
+   * domainSuffix
+   *
+   * @method faker.internet.domainSuffix
+   */
   self.domainSuffix = function () {
       return faker.random.arrayElement(faker.definitions.internet.domain_suffix);
   };
 
-  self.domainWord = function () {
-      return faker.name.firstName().replace(/([\\~#&*{}/:<>?|\"])/ig, '').toLowerCase();
+  self.domainSuffix.schema = {
+    "description": "Generates a random domain suffix.",
+    "sampleResults": ["net"]
   };
 
+  /**
+   * domainWord
+   *
+   * @method faker.internet.domainWord
+   */
+  self.domainWord = function () {
+      return faker.name.firstName().replace(/([\\~#&*{}/:<>?|\"'])/ig, '').toLowerCase();
+  };
+
+  self.domainWord.schema = {
+    "description": "Generates a random domain word.",
+    "sampleResults": ["alyce"]
+  };
+
+  /**
+   * ip
+   *
+   * @method faker.internet.ip
+   */
   self.ip = function () {
       var randNum = function () {
           return (faker.random.number(255)).toFixed(0);
@@ -5192,10 +5384,33 @@ var Internet = function (faker) {
       return result.join(".");
   };
 
+  self.ip.schema = {
+    "description": "Generates a random IP.",
+    "sampleResults": ["97.238.241.11"]
+  };
+
+  /**
+   * userAgent
+   *
+   * @method faker.internet.userAgent
+   */
   self.userAgent = function () {
     return random_ua.generate();
   };
 
+  self.userAgent.schema = {
+    "description": "Generates a random user agent.",
+    "sampleResults": ["Mozilla/5.0 (Macintosh; U; PPC Mac OS X 10_7_5 rv:6.0; SL) AppleWebKit/532.0.1 (KHTML, like Gecko) Version/7.1.6 Safari/532.0.1"]
+  };
+
+  /**
+   * color
+   *
+   * @method faker.internet.color
+   * @param {number} baseRed255
+   * @param {number} baseGreen255
+   * @param {number} baseBlue255
+   */
   self.color = function (baseRed255, baseGreen255, baseBlue255) {
       baseRed255 = baseRed255 || 0;
       baseGreen255 = baseGreen255 || 0;
@@ -5214,10 +5429,37 @@ var Internet = function (faker) {
 
   };
 
+  self.color.schema = {
+    "description": "Generates a random hexadecimal color.",
+    "sampleResults": ["#06267f"],
+    "properties": {
+      "baseRed255": {
+        "type": "number",
+        "required": false,
+        "description": "The red value. Valid values are 0 - 255."
+      },
+      "baseGreen255": {
+        "type": "number",
+        "required": false,
+        "description": "The green value. Valid values are 0 - 255."
+      },
+      "baseBlue255": {
+        "type": "number",
+        "required": false,
+        "description": "The blue value. Valid values are 0 - 255."
+      }
+    }
+  };
+
+  /**
+   * mac
+   *
+   * @method faker.internet.mac
+   */
   self.mac = function(){
       var i, mac = "";
       for (i=0; i < 12; i++) {
-          mac+= parseInt(Math.random()*16).toString(16);
+          mac+= faker.random.number(15).toString(16);
           if (i%2==1 && i != 11) {
               mac+=":";
           }
@@ -5225,6 +5467,20 @@ var Internet = function (faker) {
       return mac;
   };
 
+  self.mac.schema = {
+    "description": "Generates a random mac address.",
+    "sampleResults": ["78:06:cc:ae:b3:81"]
+  };
+
+  /**
+   * password
+   *
+   * @method faker.internet.password
+   * @param {number} len
+   * @param {boolean} memorable
+   * @param {string} pattern
+   * @param {string} prefix
+   */
   self.password = function (len, memorable, pattern, prefix) {
     len = len || 15;
     if (typeof memorable === "undefined") {
@@ -5232,13 +5488,43 @@ var Internet = function (faker) {
     }
     return password_generator(len, memorable, pattern, prefix);
   }
-  
+
+  self.password.schema = {
+    "description": "Generates a random password.",
+    "sampleResults": [
+      "AM7zl6Mg",
+      "susejofe"
+    ],
+    "properties": {
+      "length": {
+        "type": "number",
+        "required": false,
+        "description": "The number of characters in the password."
+      },
+      "memorable": {
+        "type": "boolean",
+        "required": false,
+        "description": "Whether a password should be easy to remember."
+      },
+      "pattern": {
+        "type": "regex",
+        "required": false,
+        "description": "A regex to match each character of the password against. This parameter will be negated if the memorable setting is turned on."
+      },
+      "prefix": {
+        "type": "string",
+        "required": false,
+        "description": "A value to prepend to the generated password. The prefix counts towards the length of the password."
+      }
+    }
+  };
+
 };
 
 
 module["exports"] = Internet;
 
-},{"../vendor/password-generator.js":943,"../vendor/user-agent":944}],40:[function(require,module,exports){
+},{"../vendor/password-generator.js":968,"../vendor/user-agent":969}],21:[function(require,module,exports){
 exports['de'] = require('./locales/de');
 exports['de_AT'] = require('./locales/de_AT');
 exports['de_CH'] = require('./locales/de_CH');
@@ -5257,6 +5543,7 @@ exports['fa'] = require('./locales/fa');
 exports['fr'] = require('./locales/fr');
 exports['fr_CA'] = require('./locales/fr_CA');
 exports['ge'] = require('./locales/ge');
+exports['id_ID'] = require('./locales/id_ID');
 exports['it'] = require('./locales/it');
 exports['ja'] = require('./locales/ja');
 exports['ko'] = require('./locales/ko');
@@ -5274,7 +5561,7 @@ exports['vi'] = require('./locales/vi');
 exports['zh_CN'] = require('./locales/zh_CN');
 exports['zh_TW'] = require('./locales/zh_TW');
 
-},{"./locales/de":61,"./locales/de_AT":94,"./locales/de_CH":113,"./locales/en":183,"./locales/en_AU":212,"./locales/en_BORK":220,"./locales/en_CA":228,"./locales/en_GB":240,"./locales/en_IE":250,"./locales/en_IND":262,"./locales/en_US":274,"./locales/en_au_ocker":294,"./locales/es":326,"./locales/es_MX":370,"./locales/fa":389,"./locales/fr":415,"./locales/fr_CA":435,"./locales/ge":461,"./locales/it":496,"./locales/ja":518,"./locales/ko":539,"./locales/nb_NO":569,"./locales/nep":589,"./locales/nl":613,"./locales/pl":653,"./locales/pt_BR":682,"./locales/ru":719,"./locales/sk":759,"./locales/sv":803,"./locales/tr":829,"./locales/uk":862,"./locales/vi":889,"./locales/zh_CN":912,"./locales/zh_TW":931}],41:[function(require,module,exports){
+},{"./locales/de":42,"./locales/de_AT":75,"./locales/de_CH":94,"./locales/en":169,"./locales/en_AU":201,"./locales/en_BORK":209,"./locales/en_CA":217,"./locales/en_GB":230,"./locales/en_IE":240,"./locales/en_IND":252,"./locales/en_US":264,"./locales/en_au_ocker":284,"./locales/es":316,"./locales/es_MX":360,"./locales/fa":379,"./locales/fr":405,"./locales/fr_CA":425,"./locales/ge":451,"./locales/id_ID":480,"./locales/it":517,"./locales/ja":539,"./locales/ko":560,"./locales/nb_NO":590,"./locales/nep":610,"./locales/nl":634,"./locales/pl":674,"./locales/pt_BR":703,"./locales/ru":740,"./locales/sk":780,"./locales/sv":827,"./locales/tr":853,"./locales/uk":886,"./locales/vi":913,"./locales/zh_CN":936,"./locales/zh_TW":955}],22:[function(require,module,exports){
 module["exports"] = [
   "###",
   "##",
@@ -5284,7 +5571,7 @@ module["exports"] = [
   "##c"
 ];
 
-},{}],42:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 module["exports"] = [
   "#{city_prefix} #{Name.first_name}#{city_suffix}",
   "#{city_prefix} #{Name.first_name}",
@@ -5292,7 +5579,7 @@ module["exports"] = [
   "#{Name.last_name}#{city_suffix}"
 ];
 
-},{}],43:[function(require,module,exports){
+},{}],24:[function(require,module,exports){
 module["exports"] = [
   "Nord",
   "Ost",
@@ -5303,7 +5590,7 @@ module["exports"] = [
   "Bad"
 ];
 
-},{}],44:[function(require,module,exports){
+},{}],25:[function(require,module,exports){
 module["exports"] = [
   "stadt",
   "dorf",
@@ -5312,7 +5599,7 @@ module["exports"] = [
   "burg"
 ];
 
-},{}],45:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 module["exports"] = [
   "Ägypten",
   "Äquatorialguinea",
@@ -5553,12 +5840,12 @@ module["exports"] = [
   "Zypern"
 ];
 
-},{}],46:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
 module["exports"] = [
   "Deutschland"
 ];
 
-},{}],47:[function(require,module,exports){
+},{}],28:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -5575,20 +5862,20 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":41,"./city":42,"./city_prefix":43,"./city_suffix":44,"./country":45,"./default_country":46,"./postcode":48,"./secondary_address":49,"./state":50,"./state_abbr":51,"./street_address":52,"./street_name":53,"./street_root":54}],48:[function(require,module,exports){
+},{"./building_number":22,"./city":23,"./city_prefix":24,"./city_suffix":25,"./country":26,"./default_country":27,"./postcode":29,"./secondary_address":30,"./state":31,"./state_abbr":32,"./street_address":33,"./street_name":34,"./street_root":35}],29:[function(require,module,exports){
 module["exports"] = [
   "#####",
   "#####"
 ];
 
-},{}],49:[function(require,module,exports){
+},{}],30:[function(require,module,exports){
 module["exports"] = [
   "Apt. ###",
   "Zimmer ###",
   "# OG"
 ];
 
-},{}],50:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 module["exports"] = [
   "Baden-Württemberg",
   "Bayern",
@@ -5608,7 +5895,7 @@ module["exports"] = [
   "Thüringen"
 ];
 
-},{}],51:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
 module["exports"] = [
   "BW",
   "BY",
@@ -5628,17 +5915,17 @@ module["exports"] = [
   "TH"
 ];
 
-},{}],52:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 module["exports"] = [
   "#{street_name} #{building_number}"
 ];
 
-},{}],53:[function(require,module,exports){
+},{}],34:[function(require,module,exports){
 module["exports"] = [
   "#{street_root}"
 ];
 
-},{}],54:[function(require,module,exports){
+},{}],35:[function(require,module,exports){
 module["exports"] = [
   "Ackerweg",
   "Adalbert-Stifter-Str.",
@@ -6673,25 +6960,25 @@ module["exports"] = [
   "Zur alten Fabrik"
 ];
 
-},{}],55:[function(require,module,exports){
+},{}],36:[function(require,module,exports){
 module["exports"] = [
   "+49-1##-#######",
   "+49-1###-########"
 ];
 
-},{}],56:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 var cell_phone = {};
 module['exports'] = cell_phone;
 cell_phone.formats = require("./formats");
 
-},{"./formats":55}],57:[function(require,module,exports){
+},{"./formats":36}],38:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
 company.legal_form = require("./legal_form");
 company.name = require("./name");
 
-},{"./legal_form":58,"./name":59,"./suffix":60}],58:[function(require,module,exports){
+},{"./legal_form":39,"./name":40,"./suffix":41}],39:[function(require,module,exports){
 module["exports"] = [
   "GmbH",
   "AG",
@@ -6702,16 +6989,16 @@ module["exports"] = [
   "OHG"
 ];
 
-},{}],59:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name}-#{Name.last_name}",
   "#{Name.last_name}, #{Name.last_name} und #{Name.last_name}"
 ];
 
-},{}],60:[function(require,module,exports){
-arguments[4][58][0].apply(exports,arguments)
-},{"dup":58}],61:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
+arguments[4][39][0].apply(exports,arguments)
+},{"dup":39}],42:[function(require,module,exports){
 var de = {};
 module['exports'] = de;
 de.title = "German";
@@ -6722,7 +7009,7 @@ de.lorem = require("./lorem");
 de.name = require("./name");
 de.phone_number = require("./phone_number");
 de.cell_phone = require("./cell_phone");
-},{"./address":47,"./cell_phone":56,"./company":57,"./internet":64,"./lorem":65,"./name":68,"./phone_number":74}],62:[function(require,module,exports){
+},{"./address":28,"./cell_phone":37,"./company":38,"./internet":45,"./lorem":46,"./name":49,"./phone_number":55}],43:[function(require,module,exports){
 module["exports"] = [
   "com",
   "info",
@@ -6733,25 +7020,25 @@ module["exports"] = [
   "ch"
 ];
 
-},{}],63:[function(require,module,exports){
+},{}],44:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.com",
   "hotmail.com"
 ];
 
-},{}],64:[function(require,module,exports){
+},{}],45:[function(require,module,exports){
 var internet = {};
 module['exports'] = internet;
 internet.free_email = require("./free_email");
 internet.domain_suffix = require("./domain_suffix");
 
-},{"./domain_suffix":62,"./free_email":63}],65:[function(require,module,exports){
+},{"./domain_suffix":43,"./free_email":44}],46:[function(require,module,exports){
 var lorem = {};
 module['exports'] = lorem;
 lorem.words = require("./words");
 
-},{"./words":66}],66:[function(require,module,exports){
+},{"./words":47}],47:[function(require,module,exports){
 module["exports"] = [
   "alias",
   "consequatur",
@@ -7004,7 +7291,7 @@ module["exports"] = [
   "repellat"
 ];
 
-},{}],67:[function(require,module,exports){
+},{}],48:[function(require,module,exports){
 module["exports"] = [
   "Aaron",
   "Abdul",
@@ -8163,7 +8450,7 @@ module["exports"] = [
   "Zoé"
 ];
 
-},{}],68:[function(require,module,exports){
+},{}],49:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -8172,7 +8459,7 @@ name.prefix = require("./prefix");
 name.nobility_title_prefix = require("./nobility_title_prefix");
 name.name = require("./name");
 
-},{"./first_name":67,"./last_name":69,"./name":70,"./nobility_title_prefix":71,"./prefix":72}],69:[function(require,module,exports){
+},{"./first_name":48,"./last_name":50,"./name":51,"./nobility_title_prefix":52,"./prefix":53}],50:[function(require,module,exports){
 module["exports"] = [
   "Abel",
   "Abicht",
@@ -9865,7 +10152,7 @@ module["exports"] = [
   "Überacker"
 ];
 
-},{}],70:[function(require,module,exports){
+},{}],51:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name}",
   "#{first_name} #{nobility_title_prefix} #{last_name}",
@@ -9875,7 +10162,7 @@ module["exports"] = [
   "#{first_name} #{last_name}"
 ];
 
-},{}],71:[function(require,module,exports){
+},{}],52:[function(require,module,exports){
 module["exports"] = [
   "zu",
   "von",
@@ -9883,7 +10170,7 @@ module["exports"] = [
   "von der"
 ];
 
-},{}],72:[function(require,module,exports){
+},{}],53:[function(require,module,exports){
 module["exports"] = [
   "Hr.",
   "Fr.",
@@ -9891,7 +10178,7 @@ module["exports"] = [
   "Prof. Dr."
 ];
 
-},{}],73:[function(require,module,exports){
+},{}],54:[function(require,module,exports){
 module["exports"] = [
   "(0###) #########",
   "(0####) #######",
@@ -9899,19 +10186,19 @@ module["exports"] = [
   "+49-####-########"
 ];
 
-},{}],74:[function(require,module,exports){
+},{}],55:[function(require,module,exports){
 var phone_number = {};
 module['exports'] = phone_number;
 phone_number.formats = require("./formats");
 
-},{"./formats":73}],75:[function(require,module,exports){
-arguments[4][41][0].apply(exports,arguments)
-},{"dup":41}],76:[function(require,module,exports){
+},{"./formats":54}],56:[function(require,module,exports){
+arguments[4][22][0].apply(exports,arguments)
+},{"dup":22}],57:[function(require,module,exports){
 module["exports"] = [
   "#{city_name}"
 ];
 
-},{}],77:[function(require,module,exports){
+},{}],58:[function(require,module,exports){
 module["exports"] = [
   "Aigen im Mühlkreis",
   "Allerheiligen bei Wildon",
@@ -10033,14 +10320,14 @@ module["exports"] = [
   "Übersbach"
 ];
 
-},{}],78:[function(require,module,exports){
-arguments[4][45][0].apply(exports,arguments)
-},{"dup":45}],79:[function(require,module,exports){
+},{}],59:[function(require,module,exports){
+arguments[4][26][0].apply(exports,arguments)
+},{"dup":26}],60:[function(require,module,exports){
 module["exports"] = [
   "Österreich"
 ];
 
-},{}],80:[function(require,module,exports){
+},{}],61:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.country = require("./country");
@@ -10056,14 +10343,14 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":75,"./city":76,"./city_name":77,"./country":78,"./default_country":79,"./postcode":81,"./secondary_address":82,"./state":83,"./state_abbr":84,"./street_address":85,"./street_name":86,"./street_root":87}],81:[function(require,module,exports){
+},{"./building_number":56,"./city":57,"./city_name":58,"./country":59,"./default_country":60,"./postcode":62,"./secondary_address":63,"./state":64,"./state_abbr":65,"./street_address":66,"./street_name":67,"./street_root":68}],62:[function(require,module,exports){
 module["exports"] = [
   "####"
 ];
 
-},{}],82:[function(require,module,exports){
-arguments[4][49][0].apply(exports,arguments)
-},{"dup":49}],83:[function(require,module,exports){
+},{}],63:[function(require,module,exports){
+arguments[4][30][0].apply(exports,arguments)
+},{"dup":30}],64:[function(require,module,exports){
 module["exports"] = [
   "Burgenland",
   "Kärnten",
@@ -10076,7 +10363,7 @@ module["exports"] = [
   "Wien"
 ];
 
-},{}],84:[function(require,module,exports){
+},{}],65:[function(require,module,exports){
 module["exports"] = [
   "Bgld.",
   "Ktn.",
@@ -10089,11 +10376,11 @@ module["exports"] = [
   "W"
 ];
 
-},{}],85:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],86:[function(require,module,exports){
-arguments[4][53][0].apply(exports,arguments)
-},{"dup":53}],87:[function(require,module,exports){
+},{}],66:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],67:[function(require,module,exports){
+arguments[4][34][0].apply(exports,arguments)
+},{"dup":34}],68:[function(require,module,exports){
 module["exports"] = [
   "Ahorn",
   "Ahorngasse (St. Andrä)",
@@ -10295,7 +10582,7 @@ module["exports"] = [
   "Ötzbruck"
 ];
 
-},{}],88:[function(require,module,exports){
+},{}],69:[function(require,module,exports){
 module["exports"] = [
   "+43-6##-#######",
   "06##-########",
@@ -10303,17 +10590,17 @@ module["exports"] = [
   "06##########"
 ];
 
-},{}],89:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":88,"dup":56}],90:[function(require,module,exports){
-arguments[4][57][0].apply(exports,arguments)
-},{"./legal_form":91,"./name":92,"./suffix":93,"dup":57}],91:[function(require,module,exports){
-arguments[4][58][0].apply(exports,arguments)
-},{"dup":58}],92:[function(require,module,exports){
-arguments[4][59][0].apply(exports,arguments)
-},{"dup":59}],93:[function(require,module,exports){
-arguments[4][58][0].apply(exports,arguments)
-},{"dup":58}],94:[function(require,module,exports){
+},{}],70:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":69,"dup":37}],71:[function(require,module,exports){
+arguments[4][38][0].apply(exports,arguments)
+},{"./legal_form":72,"./name":73,"./suffix":74,"dup":38}],72:[function(require,module,exports){
+arguments[4][39][0].apply(exports,arguments)
+},{"dup":39}],73:[function(require,module,exports){
+arguments[4][40][0].apply(exports,arguments)
+},{"dup":40}],74:[function(require,module,exports){
+arguments[4][39][0].apply(exports,arguments)
+},{"dup":39}],75:[function(require,module,exports){
 var de_AT = {};
 module['exports'] = de_AT;
 de_AT.title = "German (Austria)";
@@ -10324,7 +10611,7 @@ de_AT.name = require("./name");
 de_AT.phone_number = require("./phone_number");
 de_AT.cell_phone = require("./cell_phone");
 
-},{"./address":80,"./cell_phone":89,"./company":90,"./internet":97,"./name":99,"./phone_number":105}],95:[function(require,module,exports){
+},{"./address":61,"./cell_phone":70,"./company":71,"./internet":78,"./name":80,"./phone_number":86}],76:[function(require,module,exports){
 module["exports"] = [
   "com",
   "info",
@@ -10336,27 +10623,27 @@ module["exports"] = [
   "at"
 ];
 
-},{}],96:[function(require,module,exports){
-arguments[4][63][0].apply(exports,arguments)
-},{"dup":63}],97:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":95,"./free_email":96,"dup":64}],98:[function(require,module,exports){
-arguments[4][67][0].apply(exports,arguments)
-},{"dup":67}],99:[function(require,module,exports){
-arguments[4][68][0].apply(exports,arguments)
-},{"./first_name":98,"./last_name":100,"./name":101,"./nobility_title_prefix":102,"./prefix":103,"dup":68}],100:[function(require,module,exports){
-arguments[4][69][0].apply(exports,arguments)
-},{"dup":69}],101:[function(require,module,exports){
-arguments[4][70][0].apply(exports,arguments)
-},{"dup":70}],102:[function(require,module,exports){
-arguments[4][71][0].apply(exports,arguments)
-},{"dup":71}],103:[function(require,module,exports){
+},{}],77:[function(require,module,exports){
+arguments[4][44][0].apply(exports,arguments)
+},{"dup":44}],78:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":76,"./free_email":77,"dup":45}],79:[function(require,module,exports){
+arguments[4][48][0].apply(exports,arguments)
+},{"dup":48}],80:[function(require,module,exports){
+arguments[4][49][0].apply(exports,arguments)
+},{"./first_name":79,"./last_name":81,"./name":82,"./nobility_title_prefix":83,"./prefix":84,"dup":49}],81:[function(require,module,exports){
+arguments[4][50][0].apply(exports,arguments)
+},{"dup":50}],82:[function(require,module,exports){
+arguments[4][51][0].apply(exports,arguments)
+},{"dup":51}],83:[function(require,module,exports){
+arguments[4][52][0].apply(exports,arguments)
+},{"dup":52}],84:[function(require,module,exports){
 module["exports"] = [
   "Dr.",
   "Prof. Dr."
 ];
 
-},{}],104:[function(require,module,exports){
+},{}],85:[function(require,module,exports){
 module["exports"] = [
   "01 #######",
   "01#######",
@@ -10368,9 +10655,9 @@ module["exports"] = [
   "+43 ########"
 ];
 
-},{}],105:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":104,"dup":74}],106:[function(require,module,exports){
+},{}],86:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":85,"dup":55}],87:[function(require,module,exports){
 module["exports"] = [
   "CH",
   "CH",
@@ -10384,19 +10671,19 @@ module["exports"] = [
   "VN"
 ];
 
-},{}],107:[function(require,module,exports){
+},{}],88:[function(require,module,exports){
 module["exports"] = [
   "Schweiz"
 ];
 
-},{}],108:[function(require,module,exports){
+},{}],89:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.country_code = require("./country_code");
 address.postcode = require("./postcode");
 address.default_country = require("./default_country");
 
-},{"./country_code":106,"./default_country":107,"./postcode":109}],109:[function(require,module,exports){
+},{"./country_code":87,"./default_country":88,"./postcode":90}],90:[function(require,module,exports){
 module["exports"] = [
   "1###",
   "2###",
@@ -10409,15 +10696,15 @@ module["exports"] = [
   "9###"
 ];
 
-},{}],110:[function(require,module,exports){
+},{}],91:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
 company.name = require("./name");
 
-},{"./name":111,"./suffix":112}],111:[function(require,module,exports){
-arguments[4][59][0].apply(exports,arguments)
-},{"dup":59}],112:[function(require,module,exports){
+},{"./name":92,"./suffix":93}],92:[function(require,module,exports){
+arguments[4][40][0].apply(exports,arguments)
+},{"dup":40}],93:[function(require,module,exports){
 module["exports"] = [
   "AG",
   "GmbH",
@@ -10429,16 +10716,17 @@ module["exports"] = [
   "Inc."
 ];
 
-},{}],113:[function(require,module,exports){
+},{}],94:[function(require,module,exports){
 var de_CH = {};
 module['exports'] = de_CH;
 de_CH.title = "German (Switzerland)";
 de_CH.address = require("./address");
 de_CH.company = require("./company");
 de_CH.internet = require("./internet");
+de_CH.name = require("./name");
 de_CH.phone_number = require("./phone_number");
 
-},{"./address":108,"./company":110,"./internet":115,"./phone_number":117}],114:[function(require,module,exports){
+},{"./address":89,"./company":91,"./internet":96,"./name":98,"./phone_number":103}],95:[function(require,module,exports){
 module["exports"] = [
   "com",
   "net",
@@ -10451,12 +10739,591 @@ module["exports"] = [
   "ch"
 ];
 
-},{}],115:[function(require,module,exports){
+},{}],96:[function(require,module,exports){
 var internet = {};
 module['exports'] = internet;
 internet.domain_suffix = require("./domain_suffix");
 
-},{"./domain_suffix":114}],116:[function(require,module,exports){
+},{"./domain_suffix":95}],97:[function(require,module,exports){
+module["exports"] = [
+    "Adolf",
+    "Adrian",
+    "Agnes",
+    "Alain",
+    "Albert",
+    "Alberto",
+    "Aldo",
+    "Alex",
+    "Alexander",
+    "Alexandre",
+    "Alfons",
+    "Alfred",
+    "Alice",
+    "Alois",
+    "André",
+    "Andrea",
+    "Andreas",
+    "Angela",
+    "Angelo",
+    "Anita",
+    "Anna",
+    "Anne",
+    "Anne-Marie",
+    "Annemarie",
+    "Antoine",
+    "Anton",
+    "Antonio",
+    "Armin",
+    "Arnold",
+    "Arthur",
+    "Astrid",
+    "Barbara",
+    "Beat",
+    "Beatrice",
+    "Beatrix",
+    "Bernadette",
+    "Bernard",
+    "Bernhard",
+    "Bettina",
+    "Brigitta",
+    "Brigitte",
+    "Bruno",
+    "Carlo",
+    "Carmen",
+    "Caroline",
+    "Catherine",
+    "Chantal",
+    "Charles",
+    "Charlotte",
+    "Christa",
+    "Christian",
+    "Christiane",
+    "Christina",
+    "Christine",
+    "Christoph",
+    "Christophe",
+    "Claire",
+    "Claude",
+    "Claudia",
+    "Claudine",
+    "Claudio",
+    "Corinne",
+    "Cornelia",
+    "Daniel",
+    "Daniela",
+    "Daniele",
+    "Danielle",
+    "David",
+    "Denis",
+    "Denise",
+    "Didier",
+    "Dieter",
+    "Dominik",
+    "Dominique",
+    "Dora",
+    "Doris",
+    "Edgar",
+    "Edith",
+    "Eduard",
+    "Edwin",
+    "Eliane",
+    "Elisabeth",
+    "Elsa",
+    "Elsbeth",
+    "Emil",
+    "Enrico",
+    "Eric",
+    "Erica",
+    "Erich",
+    "Erika",
+    "Ernst",
+    "Erwin",
+    "Esther",
+    "Eugen",
+    "Eva",
+    "Eveline",
+    "Evelyne",
+    "Fabienne",
+    "Felix",
+    "Ferdinand",
+    "Florence",
+    "Francesco",
+    "Francis",
+    "Franco",
+    "François",
+    "Françoise",
+    "Frank",
+    "Franz",
+    "Franziska",
+    "Frédéric",
+    "Fredy",
+    "Fridolin",
+    "Friedrich",
+    "Fritz",
+    "Gabriel",
+    "Gabriela",
+    "Gabrielle",
+    "Georg",
+    "Georges",
+    "Gérald",
+    "Gérard",
+    "Gerhard",
+    "Gertrud",
+    "Gianni",
+    "Gilbert",
+    "Giorgio",
+    "Giovanni",
+    "Gisela",
+    "Giuseppe",
+    "Gottfried",
+    "Guido",
+    "Guy",
+    "Hanna",
+    "Hans",
+    "Hans-Peter",
+    "Hans-Rudolf",
+    "Hans-Ulrich",
+    "Hansjörg",
+    "Hanspeter",
+    "Hansruedi",
+    "Hansueli",
+    "Harry",
+    "Heidi",
+    "Heinrich",
+    "Heinz",
+    "Helen",
+    "Helena",
+    "Helene",
+    "Helmut",
+    "Henri",
+    "Herbert",
+    "Hermann",
+    "Hildegard",
+    "Hubert",
+    "Hugo",
+    "Ingrid",
+    "Irene",
+    "Iris",
+    "Isabelle",
+    "Jacqueline",
+    "Jacques",
+    "Jakob",
+    "Jan",
+    "Janine",
+    "Jean",
+    "Jean-Claude",
+    "Jean-Daniel",
+    "Jean-François",
+    "Jean-Jacques",
+    "Jean-Louis",
+    "Jean-Luc",
+    "Jean-Marc",
+    "Jean-Marie",
+    "Jean-Paul",
+    "Jean-Pierre",
+    "Johann",
+    "Johanna",
+    "Johannes",
+    "John",
+    "Jolanda",
+    "Jörg",
+    "Josef",
+    "Joseph",
+    "Josette",
+    "Josiane",
+    "Judith",
+    "Julia",
+    "Jürg",
+    "Karin",
+    "Karl",
+    "Katharina",
+    "Klaus",
+    "Konrad",
+    "Kurt",
+    "Laura",
+    "Laurence",
+    "Laurent",
+    "Leo",
+    "Liliane",
+    "Liselotte",
+    "Louis",
+    "Luca",
+    "Luigi",
+    "Lukas",
+    "Lydia",
+    "Madeleine",
+    "Maja",
+    "Manfred",
+    "Manuel",
+    "Manuela",
+    "Marc",
+    "Marcel",
+    "Marco",
+    "Margrit",
+    "Margrith",
+    "Maria",
+    "Marianne",
+    "Mario",
+    "Marion",
+    "Markus",
+    "Marlène",
+    "Marlies",
+    "Marlis",
+    "Martha",
+    "Martin",
+    "Martina",
+    "Martine",
+    "Massimo",
+    "Matthias",
+    "Maurice",
+    "Max",
+    "Maya",
+    "Michael",
+    "Michel",
+    "Michele",
+    "Micheline",
+    "Monica",
+    "Monika",
+    "Monique",
+    "Myriam",
+    "Nadia",
+    "Nadja",
+    "Nathalie",
+    "Nelly",
+    "Nicolas",
+    "Nicole",
+    "Niklaus",
+    "Norbert",
+    "Olivier",
+    "Oskar",
+    "Otto",
+    "Paola",
+    "Paolo",
+    "Pascal",
+    "Patricia",
+    "Patrick",
+    "Paul",
+    "Peter",
+    "Petra",
+    "Philipp",
+    "Philippe",
+    "Pia",
+    "Pierre",
+    "Pierre-Alain",
+    "Pierre-André",
+    "Pius",
+    "Priska",
+    "Rainer",
+    "Raymond",
+    "Regina",
+    "Regula",
+    "Reinhard",
+    "Remo",
+    "Renata",
+    "Renate",
+    "Renato",
+    "Rene",
+    "René",
+    "Reto",
+    "Richard",
+    "Rita",
+    "Robert",
+    "Roberto",
+    "Roger",
+    "Roland",
+    "Rolf",
+    "Roman",
+    "Rosa",
+    "Rosemarie",
+    "Rosmarie",
+    "Rudolf",
+    "Ruedi",
+    "Ruth",
+    "Sabine",
+    "Samuel",
+    "Sandra",
+    "Sandro",
+    "Serge",
+    "Silvia",
+    "Silvio",
+    "Simon",
+    "Simone",
+    "Sonia",
+    "Sonja",
+    "Stefan",
+    "Stephan",
+    "Stéphane",
+    "Stéphanie",
+    "Susanna",
+    "Susanne",
+    "Suzanne",
+    "Sylvia",
+    "Sylvie",
+    "Theo",
+    "Theodor",
+    "Therese",
+    "Thomas",
+    "Toni",
+    "Ueli",
+    "Ulrich",
+    "Urs",
+    "Ursula",
+    "Verena",
+    "Véronique",
+    "Victor",
+    "Viktor",
+    "Vreni",
+    "Walter",
+    "Werner",
+    "Willi",
+    "Willy",
+    "Wolfgang",
+    "Yolande",
+    "Yves",
+    "Yvette",
+    "Yvonne",
+
+];
+
+},{}],98:[function(require,module,exports){
+var name = {};
+module['exports'] = name;
+name.first_name = require("./first_name");
+name.last_name = require("./last_name");
+name.prefix = require("./prefix");
+name.name = require("./name");
+
+},{"./first_name":97,"./last_name":99,"./name":100,"./prefix":101}],99:[function(require,module,exports){
+module["exports"] = [
+    "Ackermann",
+    "Aebi",
+    "Albrecht",
+    "Ammann",
+    "Amrein",
+    "Arnold",
+    "Bachmann",
+    "Bader",
+    "Bär",
+    "Bättig",
+    "Bauer",
+    "Baumann",
+    "Baumgartner",
+    "Baur",
+    "Beck",
+    "Benz",
+    "Berger",
+    "Bernasconi",
+    "Betschart",
+    "Bianchi",
+    "Bieri",
+    "Blaser",
+    "Blum",
+    "Bolliger",
+    "Bosshard",
+    "Braun",
+    "Brun",
+    "Brunner",
+    "Bucher",
+    "Bühler",
+    "Bühlmann",
+    "Burri",
+    "Christen",
+    "Egger",
+    "Egli",
+    "Eichenberger",
+    "Erni",
+    "Ernst",
+    "Eugster",
+    "Fankhauser",
+    "Favre",
+    "Fehr",
+    "Felber",
+    "Felder",
+    "Ferrari",
+    "Fischer",
+    "Flückiger",
+    "Forster",
+    "Frei",
+    "Frey",
+    "Frick",
+    "Friedli",
+    "Fuchs",
+    "Furrer",
+    "Gasser",
+    "Geiger",
+    "Gerber",
+    "Gfeller",
+    "Giger",
+    "Gloor",
+    "Graf",
+    "Grob",
+    "Gross",
+    "Gut",
+    "Haas",
+    "Häfliger",
+    "Hafner",
+    "Hartmann",
+    "Hasler",
+    "Hauser",
+    "Hermann",
+    "Herzog",
+    "Hess",
+    "Hirt",
+    "Hodel",
+    "Hofer",
+    "Hoffmann",
+    "Hofmann",
+    "Hofstetter",
+    "Hotz",
+    "Huber",
+    "Hug",
+    "Hunziker",
+    "Hürlimann",
+    "Imhof",
+    "Isler",
+    "Iten",
+    "Jäggi",
+    "Jenni",
+    "Jost",
+    "Kägi",
+    "Kaiser",
+    "Kälin",
+    "Käser",
+    "Kaufmann",
+    "Keller",
+    "Kern",
+    "Kessler",
+    "Knecht",
+    "Koch",
+    "Kohler",
+    "Kuhn",
+    "Küng",
+    "Kunz",
+    "Lang",
+    "Lanz",
+    "Lehmann",
+    "Leu",
+    "Leunberger",
+    "Lüscher",
+    "Lustenberger",
+    "Lüthi",
+    "Lutz",
+    "Mäder",
+    "Maier",
+    "Marti",
+    "Martin",
+    "Maurer",
+    "Mayer",
+    "Meier",
+    "Meili",
+    "Meister",
+    "Merz",
+    "Mettler",
+    "Meyer",
+    "Michel",
+    "Moser",
+    "Müller",
+    "Näf",
+    "Ott",
+    "Peter",
+    "Pfister",
+    "Portmann",
+    "Probst",
+    "Rey",
+    "Ritter",
+    "Roos",
+    "Roth",
+    "Rüegg",
+    "Schäfer",
+    "Schaller",
+    "Schär",
+    "Schärer",
+    "Schaub",
+    "Scheidegger",
+    "Schenk",
+    "Scherrer",
+    "Schlatter",
+    "Schmid",
+    "Schmidt",
+    "Schneider",
+    "Schnyder",
+    "Schoch",
+    "Schuler",
+    "Schumacher",
+    "Schürch",
+    "Schwab",
+    "Schwarz",
+    "Schweizer",
+    "Seiler",
+    "Senn",
+    "Sidler",
+    "Siegrist",
+    "Sigrist",
+    "Spörri",
+    "Stadelmann",
+    "Stalder",
+    "Staub",
+    "Stauffer",
+    "Steffen",
+    "Steiger",
+    "Steiner",
+    "Steinmann",
+    "Stettler",
+    "Stocker",
+    "Stöckli",
+    "Stucki",
+    "Studer",
+    "Stutz",
+    "Suter",
+    "Sutter",
+    "Tanner",
+    "Thommen",
+    "Tobler",
+    "Vogel",
+    "Vogt",
+    "Wagner",
+    "Walder",
+    "Walter",
+    "Weber",
+    "Wegmann",
+    "Wehrli",
+    "Weibel",
+    "Wenger",
+    "Wettstein",
+    "Widmer",
+    "Winkler",
+    "Wirth",
+    "Wirz",
+    "Wolf",
+    "Wüthrich",
+    "Wyss",
+    "Zbinden",
+    "Zehnder",
+    "Ziegler",
+    "Zimmermann",
+    "Zingg",
+    "Zollinger",
+    "Zürcher"
+];
+
+},{}],100:[function(require,module,exports){
+module["exports"] = [
+  "#{first_name} #{last_name}",
+  "#{first_name} #{last_name}",
+  "#{first_name} #{last_name}",
+  "#{first_name} #{last_name}",
+  "#{first_name} #{last_name}",
+  "#{first_name} #{last_name}"
+];
+
+},{}],101:[function(require,module,exports){
+module["exports"] = [
+  "Hr.",
+  "Fr.",
+  "Dr."
+];
+
+},{}],102:[function(require,module,exports){
 module["exports"] = [
   "0800 ### ###",
   "0800 ## ## ##",
@@ -10469,18 +11336,18 @@ module["exports"] = [
   "0041 79 ### ## ##"
 ];
 
-},{}],117:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":116,"dup":74}],118:[function(require,module,exports){
+},{}],103:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":102,"dup":55}],104:[function(require,module,exports){
 module["exports"] = [
   "#####",
   "####",
   "###"
 ];
 
-},{}],119:[function(require,module,exports){
-arguments[4][42][0].apply(exports,arguments)
-},{"dup":42}],120:[function(require,module,exports){
+},{}],105:[function(require,module,exports){
+arguments[4][23][0].apply(exports,arguments)
+},{"dup":23}],106:[function(require,module,exports){
 module["exports"] = [
   "North",
   "East",
@@ -10491,7 +11358,7 @@ module["exports"] = [
   "Port"
 ];
 
-},{}],121:[function(require,module,exports){
+},{}],107:[function(require,module,exports){
 module["exports"] = [
   "town",
   "ton",
@@ -10514,7 +11381,7 @@ module["exports"] = [
   "shire"
 ];
 
-},{}],122:[function(require,module,exports){
+},{}],108:[function(require,module,exports){
 module["exports"] = [
   "Afghanistan",
   "Albania",
@@ -10763,7 +11630,7 @@ module["exports"] = [
   "Zimbabwe"
 ];
 
-},{}],123:[function(require,module,exports){
+},{}],109:[function(require,module,exports){
 module["exports"] = [
   "AD",
   "AE",
@@ -11017,7 +11884,7 @@ module["exports"] = [
   "ZW"
 ];
 
-},{}],124:[function(require,module,exports){
+},{}],110:[function(require,module,exports){
 module["exports"] = [
   "Avon",
   "Bedfordshire",
@@ -11027,12 +11894,12 @@ module["exports"] = [
   "Cambridgeshire"
 ];
 
-},{}],125:[function(require,module,exports){
+},{}],111:[function(require,module,exports){
 module["exports"] = [
   "United States of America"
 ];
 
-},{}],126:[function(require,module,exports){
+},{}],112:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -11053,21 +11920,21 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":118,"./city":119,"./city_prefix":120,"./city_suffix":121,"./country":122,"./country_code":123,"./county":124,"./default_country":125,"./postcode":127,"./postcode_by_state":128,"./secondary_address":129,"./state":130,"./state_abbr":131,"./street_address":132,"./street_name":133,"./street_suffix":134,"./time_zone":135}],127:[function(require,module,exports){
+},{"./building_number":104,"./city":105,"./city_prefix":106,"./city_suffix":107,"./country":108,"./country_code":109,"./county":110,"./default_country":111,"./postcode":113,"./postcode_by_state":114,"./secondary_address":115,"./state":116,"./state_abbr":117,"./street_address":118,"./street_name":119,"./street_suffix":120,"./time_zone":121}],113:[function(require,module,exports){
 module["exports"] = [
   "#####",
   "#####-####"
 ];
 
-},{}],128:[function(require,module,exports){
-arguments[4][127][0].apply(exports,arguments)
-},{"dup":127}],129:[function(require,module,exports){
+},{}],114:[function(require,module,exports){
+arguments[4][113][0].apply(exports,arguments)
+},{"dup":113}],115:[function(require,module,exports){
 module["exports"] = [
   "Apt. ###",
   "Suite ###"
 ];
 
-},{}],130:[function(require,module,exports){
+},{}],116:[function(require,module,exports){
 module["exports"] = [
   "Alabama",
   "Alaska",
@@ -11121,7 +11988,7 @@ module["exports"] = [
   "Wyoming"
 ];
 
-},{}],131:[function(require,module,exports){
+},{}],117:[function(require,module,exports){
 module["exports"] = [
   "AL",
   "AK",
@@ -11175,18 +12042,18 @@ module["exports"] = [
   "WY"
 ];
 
-},{}],132:[function(require,module,exports){
+},{}],118:[function(require,module,exports){
 module["exports"] = [
   "#{building_number} #{street_name}"
 ];
 
-},{}],133:[function(require,module,exports){
+},{}],119:[function(require,module,exports){
 module["exports"] = [
   "#{Name.first_name} #{street_suffix}",
   "#{Name.last_name} #{street_suffix}"
 ];
 
-},{}],134:[function(require,module,exports){
+},{}],120:[function(require,module,exports){
 module["exports"] = [
   "Alley",
   "Avenue",
@@ -11415,7 +12282,7 @@ module["exports"] = [
   "Wells"
 ];
 
-},{}],135:[function(require,module,exports){
+},{}],121:[function(require,module,exports){
 module["exports"] = [
   "Pacific/Midway",
   "Pacific/Pago_Pago",
@@ -11562,20 +12429,20 @@ module["exports"] = [
   "Pacific/Apia"
 ];
 
-},{}],136:[function(require,module,exports){
+},{}],122:[function(require,module,exports){
 module["exports"] = [
   "#{Name.name}",
   "#{Company.name}"
 ];
 
-},{}],137:[function(require,module,exports){
+},{}],123:[function(require,module,exports){
 var app = {};
 module['exports'] = app;
 app.name = require("./name");
 app.version = require("./version");
 app.author = require("./author");
 
-},{"./author":136,"./name":138,"./version":139}],138:[function(require,module,exports){
+},{"./author":122,"./name":124,"./version":125}],124:[function(require,module,exports){
 module["exports"] = [
   "Redhold",
   "Treeflex",
@@ -11641,7 +12508,7 @@ module["exports"] = [
   "Keylex"
 ];
 
-},{}],139:[function(require,module,exports){
+},{}],125:[function(require,module,exports){
 module["exports"] = [
   "0.#.#",
   "0.##",
@@ -11650,7 +12517,7 @@ module["exports"] = [
   "#.#.#"
 ];
 
-},{}],140:[function(require,module,exports){
+},{}],126:[function(require,module,exports){
 module["exports"] = [
   "2011-10-12",
   "2012-11-12",
@@ -11658,7 +12525,7 @@ module["exports"] = [
   "2013-9-12"
 ];
 
-},{}],141:[function(require,module,exports){
+},{}],127:[function(require,module,exports){
 module["exports"] = [
   "1234-2121-1221-1211",
   "1212-1221-1121-1234",
@@ -11666,7 +12533,7 @@ module["exports"] = [
   "1228-1221-1221-1431"
 ];
 
-},{}],142:[function(require,module,exports){
+},{}],128:[function(require,module,exports){
 module["exports"] = [
   "visa",
   "mastercard",
@@ -11674,14 +12541,14 @@ module["exports"] = [
   "discover"
 ];
 
-},{}],143:[function(require,module,exports){
+},{}],129:[function(require,module,exports){
 var business = {};
 module['exports'] = business;
 business.credit_card_numbers = require("./credit_card_numbers");
 business.credit_card_expiry_dates = require("./credit_card_expiry_dates");
 business.credit_card_types = require("./credit_card_types");
 
-},{"./credit_card_expiry_dates":140,"./credit_card_numbers":141,"./credit_card_types":142}],144:[function(require,module,exports){
+},{"./credit_card_expiry_dates":126,"./credit_card_numbers":127,"./credit_card_types":128}],130:[function(require,module,exports){
 module["exports"] = [
   "###-###-####",
   "(###) ###-####",
@@ -11689,9 +12556,9 @@ module["exports"] = [
   "###.###.####"
 ];
 
-},{}],145:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":144,"dup":56}],146:[function(require,module,exports){
+},{}],131:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":130,"dup":37}],132:[function(require,module,exports){
 module["exports"] = [
   "red",
   "green",
@@ -11726,7 +12593,7 @@ module["exports"] = [
   "silver"
 ];
 
-},{}],147:[function(require,module,exports){
+},{}],133:[function(require,module,exports){
 module["exports"] = [
   "Books",
   "Movies",
@@ -11752,14 +12619,14 @@ module["exports"] = [
   "Industrial"
 ];
 
-},{}],148:[function(require,module,exports){
+},{}],134:[function(require,module,exports){
 var commerce = {};
 module['exports'] = commerce;
 commerce.color = require("./color");
 commerce.department = require("./department");
 commerce.product_name = require("./product_name");
 
-},{"./color":146,"./department":147,"./product_name":149}],149:[function(require,module,exports){
+},{"./color":132,"./department":133,"./product_name":135}],135:[function(require,module,exports){
 module["exports"] = {
   "adjective": [
     "Small",
@@ -11821,7 +12688,7 @@ module["exports"] = {
   ]
 };
 
-},{}],150:[function(require,module,exports){
+},{}],136:[function(require,module,exports){
 module["exports"] = [
   "Adaptive",
   "Advanced",
@@ -11925,7 +12792,7 @@ module["exports"] = [
   "Vision-oriented"
 ];
 
-},{}],151:[function(require,module,exports){
+},{}],137:[function(require,module,exports){
 module["exports"] = [
   "clicks-and-mortar",
   "value-added",
@@ -11994,7 +12861,7 @@ module["exports"] = [
   "rich"
 ];
 
-},{}],152:[function(require,module,exports){
+},{}],138:[function(require,module,exports){
 module["exports"] = [
   "synergies",
   "web-readiness",
@@ -12042,7 +12909,7 @@ module["exports"] = [
   "methodologies"
 ];
 
-},{}],153:[function(require,module,exports){
+},{}],139:[function(require,module,exports){
 module["exports"] = [
   "implement",
   "utilize",
@@ -12106,7 +12973,7 @@ module["exports"] = [
   "recontextualize"
 ];
 
-},{}],154:[function(require,module,exports){
+},{}],140:[function(require,module,exports){
 module["exports"] = [
   "24 hour",
   "24/7",
@@ -12211,7 +13078,7 @@ module["exports"] = [
   "zero tolerance"
 ];
 
-},{}],155:[function(require,module,exports){
+},{}],141:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
@@ -12223,14 +13090,14 @@ company.bs_adjective = require("./bs_adjective");
 company.bs_noun = require("./bs_noun");
 company.name = require("./name");
 
-},{"./adjective":150,"./bs_adjective":151,"./bs_noun":152,"./bs_verb":153,"./descriptor":154,"./name":156,"./noun":157,"./suffix":158}],156:[function(require,module,exports){
+},{"./adjective":136,"./bs_adjective":137,"./bs_noun":138,"./bs_verb":139,"./descriptor":140,"./name":142,"./noun":143,"./suffix":144}],142:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name}-#{Name.last_name}",
   "#{Name.last_name}, #{Name.last_name} and #{Name.last_name}"
 ];
 
-},{}],157:[function(require,module,exports){
+},{}],143:[function(require,module,exports){
 module["exports"] = [
   "ability",
   "access",
@@ -12338,7 +13205,7 @@ module["exports"] = [
   "workforce"
 ];
 
-},{}],158:[function(require,module,exports){
+},{}],144:[function(require,module,exports){
 module["exports"] = [
   "Inc",
   "and Sons",
@@ -12346,19 +13213,19 @@ module["exports"] = [
   "Group"
 ];
 
-},{}],159:[function(require,module,exports){
+},{}],145:[function(require,module,exports){
 module["exports"] = [
   "/34##-######-####L/",
   "/37##-######-####L/"
 ];
 
-},{}],160:[function(require,module,exports){
+},{}],146:[function(require,module,exports){
 module["exports"] = [
   "/30[0-5]#-######-###L/",
   "/368#-######-###L/"
 ];
 
-},{}],161:[function(require,module,exports){
+},{}],147:[function(require,module,exports){
 module["exports"] = [
   "/6011-####-####-###L/",
   "/65##-####-####-###L/",
@@ -12368,7 +13235,7 @@ module["exports"] = [
   "/64[4-9]#-62##-####-####-###L/"
 ];
 
-},{}],162:[function(require,module,exports){
+},{}],148:[function(require,module,exports){
 var credit_card = {};
 module['exports'] = credit_card;
 credit_card.visa = require("./visa");
@@ -12382,14 +13249,14 @@ credit_card.solo = require("./solo");
 credit_card.maestro = require("./maestro");
 credit_card.laser = require("./laser");
 
-},{"./american_express":159,"./diners_club":160,"./discover":161,"./jcb":163,"./laser":164,"./maestro":165,"./mastercard":166,"./solo":167,"./switch":168,"./visa":169}],163:[function(require,module,exports){
+},{"./american_express":145,"./diners_club":146,"./discover":147,"./jcb":149,"./laser":150,"./maestro":151,"./mastercard":152,"./solo":153,"./switch":154,"./visa":155}],149:[function(require,module,exports){
 module["exports"] = [
   "/3528-####-####-###L/",
   "/3529-####-####-###L/",
   "/35[3-8]#-####-####-###L/"
 ];
 
-},{}],164:[function(require,module,exports){
+},{}],150:[function(require,module,exports){
 module["exports"] = [
   "/6304###########L/",
   "/6706###########L/",
@@ -12401,46 +13268,46 @@ module["exports"] = [
   "/6709#########{5,6}L/"
 ];
 
-},{}],165:[function(require,module,exports){
+},{}],151:[function(require,module,exports){
 module["exports"] = [
   "/50#{9,16}L/",
   "/5[6-8]#{9,16}L/",
   "/56##{9,16}L/"
 ];
 
-},{}],166:[function(require,module,exports){
+},{}],152:[function(require,module,exports){
 module["exports"] = [
   "/5[1-5]##-####-####-###L/",
   "/6771-89##-####-###L/"
 ];
 
-},{}],167:[function(require,module,exports){
+},{}],153:[function(require,module,exports){
 module["exports"] = [
   "/6767-####-####-###L/",
   "/6767-####-####-####-#L/",
   "/6767-####-####-####-##L/"
 ];
 
-},{}],168:[function(require,module,exports){
+},{}],154:[function(require,module,exports){
 module["exports"] = [
   "/6759-####-####-###L/",
   "/6759-####-####-####-#L/",
   "/6759-####-####-####-##L/"
 ];
 
-},{}],169:[function(require,module,exports){
+},{}],155:[function(require,module,exports){
 module["exports"] = [
   "/4###########L/",
   "/4###-####-####-###L/"
 ];
 
-},{}],170:[function(require,module,exports){
+},{}],156:[function(require,module,exports){
 var date = {};
 module["exports"] = date;
 date.month = require("./month");
 date.weekday = require("./weekday");
 
-},{"./month":171,"./weekday":172}],171:[function(require,module,exports){
+},{"./month":157,"./weekday":158}],157:[function(require,module,exports){
 // Source: http://unicode.org/cldr/trac/browser/tags/release-27/common/main/en.xml#L1799
 module["exports"] = {
   wide: [
@@ -12505,7 +13372,7 @@ module["exports"] = {
   ]
 };
 
-},{}],172:[function(require,module,exports){
+},{}],158:[function(require,module,exports){
 // Source: http://unicode.org/cldr/trac/browser/tags/release-27/common/main/en.xml#L1847
 module["exports"] = {
   wide: [
@@ -12550,7 +13417,7 @@ module["exports"] = {
   ]
 };
 
-},{}],173:[function(require,module,exports){
+},{}],159:[function(require,module,exports){
 module["exports"] = [
   "Checking",
   "Savings",
@@ -12562,7 +13429,7 @@ module["exports"] = [
   "Personal Loan"
 ];
 
-},{}],174:[function(require,module,exports){
+},{}],160:[function(require,module,exports){
 module["exports"] = {
   "UAE Dirham": {
     "code": "AED",
@@ -13242,14 +14109,14 @@ module["exports"] = {
   }
 };
 
-},{}],175:[function(require,module,exports){
+},{}],161:[function(require,module,exports){
 var finance = {};
 module['exports'] = finance;
 finance.account_type = require("./account_type");
 finance.transaction_type = require("./transaction_type");
 finance.currency = require("./currency");
 
-},{"./account_type":173,"./currency":174,"./transaction_type":176}],176:[function(require,module,exports){
+},{"./account_type":159,"./currency":160,"./transaction_type":162}],162:[function(require,module,exports){
 module["exports"] = [
   "deposit",
   "withdrawal",
@@ -13257,7 +14124,7 @@ module["exports"] = [
   "invoice"
 ];
 
-},{}],177:[function(require,module,exports){
+},{}],163:[function(require,module,exports){
 module["exports"] = [
   "TCP",
   "HTTP",
@@ -13290,7 +14157,7 @@ module["exports"] = [
   "JBOD"
 ];
 
-},{}],178:[function(require,module,exports){
+},{}],164:[function(require,module,exports){
 module["exports"] = [
   "auxiliary",
   "primary",
@@ -13312,7 +14179,7 @@ module["exports"] = [
   "mobile"
 ];
 
-},{}],179:[function(require,module,exports){
+},{}],165:[function(require,module,exports){
 var hacker = {};
 module['exports'] = hacker;
 hacker.abbreviation = require("./abbreviation");
@@ -13321,7 +14188,7 @@ hacker.noun = require("./noun");
 hacker.verb = require("./verb");
 hacker.ingverb = require("./ingverb");
 
-},{"./abbreviation":177,"./adjective":178,"./ingverb":180,"./noun":181,"./verb":182}],180:[function(require,module,exports){
+},{"./abbreviation":163,"./adjective":164,"./ingverb":166,"./noun":167,"./verb":168}],166:[function(require,module,exports){
 module["exports"] = [
   "backing up",
   "bypassing",
@@ -13341,7 +14208,7 @@ module["exports"] = [
   "parsing"
 ];
 
-},{}],181:[function(require,module,exports){
+},{}],167:[function(require,module,exports){
 module["exports"] = [
   "driver",
   "protocol",
@@ -13369,7 +14236,7 @@ module["exports"] = [
   "matrix"
 ];
 
-},{}],182:[function(require,module,exports){
+},{}],168:[function(require,module,exports){
 module["exports"] = [
   "back up",
   "bypass",
@@ -13391,7 +14258,7 @@ module["exports"] = [
   "parse"
 ];
 
-},{}],183:[function(require,module,exports){
+},{}],169:[function(require,module,exports){
 var en = {};
 module['exports'] = en;
 en.title = "English";
@@ -13411,8 +14278,9 @@ en.hacker = require("./hacker");
 en.app = require("./app");
 en.finance = require("./finance");
 en.date = require("./date");
+en.system = require("./system");
 
-},{"./address":126,"./app":137,"./business":143,"./cell_phone":145,"./commerce":148,"./company":155,"./credit_card":162,"./date":170,"./finance":175,"./hacker":179,"./internet":187,"./lorem":188,"./name":192,"./phone_number":199,"./team":201}],184:[function(require,module,exports){
+},{"./address":112,"./app":123,"./business":129,"./cell_phone":131,"./commerce":134,"./company":141,"./credit_card":148,"./date":156,"./finance":161,"./hacker":165,"./internet":174,"./lorem":175,"./name":179,"./phone_number":186,"./system":187,"./team":190}],170:[function(require,module,exports){
 module["exports"] = [
   "https://s3.amazonaws.com/uifaces/faces/twitter/jarjan/128.jpg",
   "https://s3.amazonaws.com/uifaces/faces/twitter/mahdif/128.jpg",
@@ -14682,7 +15550,7 @@ module["exports"] = [
   "https://s3.amazonaws.com/uifaces/faces/twitter/areandacom/128.jpg"
 ];
 
-},{}],185:[function(require,module,exports){
+},{}],171:[function(require,module,exports){
 module["exports"] = [
   "com",
   "biz",
@@ -14692,22 +15560,30 @@ module["exports"] = [
   "org"
 ];
 
-},{}],186:[function(require,module,exports){
-arguments[4][63][0].apply(exports,arguments)
-},{"dup":63}],187:[function(require,module,exports){
+},{}],172:[function(require,module,exports){
+module["exports"] = [
+  "example.org",
+  "example.com",
+  "example.net"
+];
+
+},{}],173:[function(require,module,exports){
+arguments[4][44][0].apply(exports,arguments)
+},{"dup":44}],174:[function(require,module,exports){
 var internet = {};
 module['exports'] = internet;
 internet.free_email = require("./free_email");
+internet.example_email = require("./example_email");
 internet.domain_suffix = require("./domain_suffix");
 internet.avatar_uri = require("./avatar_uri");
 
-},{"./avatar_uri":184,"./domain_suffix":185,"./free_email":186}],188:[function(require,module,exports){
+},{"./avatar_uri":170,"./domain_suffix":171,"./example_email":172,"./free_email":173}],175:[function(require,module,exports){
 var lorem = {};
 module['exports'] = lorem;
 lorem.words = require("./words");
 lorem.supplemental = require("./supplemental");
 
-},{"./supplemental":189,"./words":190}],189:[function(require,module,exports){
+},{"./supplemental":176,"./words":177}],176:[function(require,module,exports){
 module["exports"] = [
   "abbas",
   "abduco",
@@ -15551,9 +16427,9 @@ module["exports"] = [
   "xiphias"
 ];
 
-},{}],190:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],191:[function(require,module,exports){
+},{}],177:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],178:[function(require,module,exports){
 module["exports"] = [
   "Aaliyah",
   "Aaron",
@@ -18564,7 +19440,7 @@ module["exports"] = [
   "Zula"
 ];
 
-},{}],192:[function(require,module,exports){
+},{}],179:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -18574,7 +19450,7 @@ name.suffix = require("./suffix");
 name.title = require("./title");
 name.name = require("./name");
 
-},{"./first_name":191,"./last_name":193,"./name":194,"./prefix":195,"./suffix":196,"./title":197}],193:[function(require,module,exports){
+},{"./first_name":178,"./last_name":180,"./name":181,"./prefix":182,"./suffix":183,"./title":184}],180:[function(require,module,exports){
 module["exports"] = [
   "Abbott",
   "Abernathy",
@@ -19052,7 +19928,7 @@ module["exports"] = [
   "Zulauf"
 ];
 
-},{}],194:[function(require,module,exports){
+},{}],181:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name}",
   "#{first_name} #{last_name} #{suffix}",
@@ -19062,7 +19938,7 @@ module["exports"] = [
   "#{first_name} #{last_name}"
 ];
 
-},{}],195:[function(require,module,exports){
+},{}],182:[function(require,module,exports){
 module["exports"] = [
   "Mr.",
   "Mrs.",
@@ -19071,7 +19947,7 @@ module["exports"] = [
   "Dr."
 ];
 
-},{}],196:[function(require,module,exports){
+},{}],183:[function(require,module,exports){
 module["exports"] = [
   "Jr.",
   "Sr.",
@@ -19086,7 +19962,7 @@ module["exports"] = [
   "DVM"
 ];
 
-},{}],197:[function(require,module,exports){
+},{}],184:[function(require,module,exports){
 module["exports"] = {
   "descriptor": [
     "Lead",
@@ -19180,7 +20056,7 @@ module["exports"] = {
   ]
 };
 
-},{}],198:[function(require,module,exports){
+},{}],185:[function(require,module,exports){
 module["exports"] = [
   "###-###-####",
   "(###) ###-####",
@@ -19204,9 +20080,6595 @@ module["exports"] = [
   "###.###.#### x#####"
 ];
 
-},{}],199:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":198,"dup":74}],200:[function(require,module,exports){
+},{}],186:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":185,"dup":55}],187:[function(require,module,exports){
+var system = {};
+module['exports'] = system;
+system.mimeTypes = require("./mimeTypes");
+},{"./mimeTypes":188}],188:[function(require,module,exports){
+/*
+
+The MIT License (MIT)
+
+Copyright (c) 2014 Jonathan Ong me@jongleberry.com
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+Definitions from mime-db v1.21.0
+For updates check: https://github.com/jshttp/mime-db/blob/master/db.json
+
+*/
+
+module['exports'] = {
+  "application/1d-interleaved-parityfec": {
+    "source": "iana"
+  },
+  "application/3gpdash-qoe-report+xml": {
+    "source": "iana"
+  },
+  "application/3gpp-ims+xml": {
+    "source": "iana"
+  },
+  "application/a2l": {
+    "source": "iana"
+  },
+  "application/activemessage": {
+    "source": "iana"
+  },
+  "application/alto-costmap+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-costmapfilter+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-directory+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-endpointcost+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-endpointcostparams+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-endpointprop+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-endpointpropparams+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-error+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-networkmap+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/alto-networkmapfilter+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/aml": {
+    "source": "iana"
+  },
+  "application/andrew-inset": {
+    "source": "iana",
+    "extensions": ["ez"]
+  },
+  "application/applefile": {
+    "source": "iana"
+  },
+  "application/applixware": {
+    "source": "apache",
+    "extensions": ["aw"]
+  },
+  "application/atf": {
+    "source": "iana"
+  },
+  "application/atfx": {
+    "source": "iana"
+  },
+  "application/atom+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["atom"]
+  },
+  "application/atomcat+xml": {
+    "source": "iana",
+    "extensions": ["atomcat"]
+  },
+  "application/atomdeleted+xml": {
+    "source": "iana"
+  },
+  "application/atomicmail": {
+    "source": "iana"
+  },
+  "application/atomsvc+xml": {
+    "source": "iana",
+    "extensions": ["atomsvc"]
+  },
+  "application/atxml": {
+    "source": "iana"
+  },
+  "application/auth-policy+xml": {
+    "source": "iana"
+  },
+  "application/bacnet-xdd+zip": {
+    "source": "iana"
+  },
+  "application/batch-smtp": {
+    "source": "iana"
+  },
+  "application/bdoc": {
+    "compressible": false,
+    "extensions": ["bdoc"]
+  },
+  "application/beep+xml": {
+    "source": "iana"
+  },
+  "application/calendar+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/calendar+xml": {
+    "source": "iana"
+  },
+  "application/call-completion": {
+    "source": "iana"
+  },
+  "application/cals-1840": {
+    "source": "iana"
+  },
+  "application/cbor": {
+    "source": "iana"
+  },
+  "application/ccmp+xml": {
+    "source": "iana"
+  },
+  "application/ccxml+xml": {
+    "source": "iana",
+    "extensions": ["ccxml"]
+  },
+  "application/cdfx+xml": {
+    "source": "iana"
+  },
+  "application/cdmi-capability": {
+    "source": "iana",
+    "extensions": ["cdmia"]
+  },
+  "application/cdmi-container": {
+    "source": "iana",
+    "extensions": ["cdmic"]
+  },
+  "application/cdmi-domain": {
+    "source": "iana",
+    "extensions": ["cdmid"]
+  },
+  "application/cdmi-object": {
+    "source": "iana",
+    "extensions": ["cdmio"]
+  },
+  "application/cdmi-queue": {
+    "source": "iana",
+    "extensions": ["cdmiq"]
+  },
+  "application/cdni": {
+    "source": "iana"
+  },
+  "application/cea": {
+    "source": "iana"
+  },
+  "application/cea-2018+xml": {
+    "source": "iana"
+  },
+  "application/cellml+xml": {
+    "source": "iana"
+  },
+  "application/cfw": {
+    "source": "iana"
+  },
+  "application/cms": {
+    "source": "iana"
+  },
+  "application/cnrp+xml": {
+    "source": "iana"
+  },
+  "application/coap-group+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/commonground": {
+    "source": "iana"
+  },
+  "application/conference-info+xml": {
+    "source": "iana"
+  },
+  "application/cpl+xml": {
+    "source": "iana"
+  },
+  "application/csrattrs": {
+    "source": "iana"
+  },
+  "application/csta+xml": {
+    "source": "iana"
+  },
+  "application/cstadata+xml": {
+    "source": "iana"
+  },
+  "application/csvm+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/cu-seeme": {
+    "source": "apache",
+    "extensions": ["cu"]
+  },
+  "application/cybercash": {
+    "source": "iana"
+  },
+  "application/dart": {
+    "compressible": true
+  },
+  "application/dash+xml": {
+    "source": "iana",
+    "extensions": ["mdp"]
+  },
+  "application/dashdelta": {
+    "source": "iana"
+  },
+  "application/davmount+xml": {
+    "source": "iana",
+    "extensions": ["davmount"]
+  },
+  "application/dca-rft": {
+    "source": "iana"
+  },
+  "application/dcd": {
+    "source": "iana"
+  },
+  "application/dec-dx": {
+    "source": "iana"
+  },
+  "application/dialog-info+xml": {
+    "source": "iana"
+  },
+  "application/dicom": {
+    "source": "iana"
+  },
+  "application/dii": {
+    "source": "iana"
+  },
+  "application/dit": {
+    "source": "iana"
+  },
+  "application/dns": {
+    "source": "iana"
+  },
+  "application/docbook+xml": {
+    "source": "apache",
+    "extensions": ["dbk"]
+  },
+  "application/dskpp+xml": {
+    "source": "iana"
+  },
+  "application/dssc+der": {
+    "source": "iana",
+    "extensions": ["dssc"]
+  },
+  "application/dssc+xml": {
+    "source": "iana",
+    "extensions": ["xdssc"]
+  },
+  "application/dvcs": {
+    "source": "iana"
+  },
+  "application/ecmascript": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["ecma"]
+  },
+  "application/edi-consent": {
+    "source": "iana"
+  },
+  "application/edi-x12": {
+    "source": "iana",
+    "compressible": false
+  },
+  "application/edifact": {
+    "source": "iana",
+    "compressible": false
+  },
+  "application/emergencycalldata.comment+xml": {
+    "source": "iana"
+  },
+  "application/emergencycalldata.deviceinfo+xml": {
+    "source": "iana"
+  },
+  "application/emergencycalldata.providerinfo+xml": {
+    "source": "iana"
+  },
+  "application/emergencycalldata.serviceinfo+xml": {
+    "source": "iana"
+  },
+  "application/emergencycalldata.subscriberinfo+xml": {
+    "source": "iana"
+  },
+  "application/emma+xml": {
+    "source": "iana",
+    "extensions": ["emma"]
+  },
+  "application/emotionml+xml": {
+    "source": "iana"
+  },
+  "application/encaprtp": {
+    "source": "iana"
+  },
+  "application/epp+xml": {
+    "source": "iana"
+  },
+  "application/epub+zip": {
+    "source": "iana",
+    "extensions": ["epub"]
+  },
+  "application/eshop": {
+    "source": "iana"
+  },
+  "application/exi": {
+    "source": "iana",
+    "extensions": ["exi"]
+  },
+  "application/fastinfoset": {
+    "source": "iana"
+  },
+  "application/fastsoap": {
+    "source": "iana"
+  },
+  "application/fdt+xml": {
+    "source": "iana"
+  },
+  "application/fits": {
+    "source": "iana"
+  },
+  "application/font-sfnt": {
+    "source": "iana"
+  },
+  "application/font-tdpfr": {
+    "source": "iana",
+    "extensions": ["pfr"]
+  },
+  "application/font-woff": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["woff"]
+  },
+  "application/font-woff2": {
+    "compressible": false,
+    "extensions": ["woff2"]
+  },
+  "application/framework-attributes+xml": {
+    "source": "iana"
+  },
+  "application/gml+xml": {
+    "source": "apache",
+    "extensions": ["gml"]
+  },
+  "application/gpx+xml": {
+    "source": "apache",
+    "extensions": ["gpx"]
+  },
+  "application/gxf": {
+    "source": "apache",
+    "extensions": ["gxf"]
+  },
+  "application/gzip": {
+    "source": "iana",
+    "compressible": false
+  },
+  "application/h224": {
+    "source": "iana"
+  },
+  "application/held+xml": {
+    "source": "iana"
+  },
+  "application/http": {
+    "source": "iana"
+  },
+  "application/hyperstudio": {
+    "source": "iana",
+    "extensions": ["stk"]
+  },
+  "application/ibe-key-request+xml": {
+    "source": "iana"
+  },
+  "application/ibe-pkg-reply+xml": {
+    "source": "iana"
+  },
+  "application/ibe-pp-data": {
+    "source": "iana"
+  },
+  "application/iges": {
+    "source": "iana"
+  },
+  "application/im-iscomposing+xml": {
+    "source": "iana"
+  },
+  "application/index": {
+    "source": "iana"
+  },
+  "application/index.cmd": {
+    "source": "iana"
+  },
+  "application/index.obj": {
+    "source": "iana"
+  },
+  "application/index.response": {
+    "source": "iana"
+  },
+  "application/index.vnd": {
+    "source": "iana"
+  },
+  "application/inkml+xml": {
+    "source": "iana",
+    "extensions": ["ink","inkml"]
+  },
+  "application/iotp": {
+    "source": "iana"
+  },
+  "application/ipfix": {
+    "source": "iana",
+    "extensions": ["ipfix"]
+  },
+  "application/ipp": {
+    "source": "iana"
+  },
+  "application/isup": {
+    "source": "iana"
+  },
+  "application/its+xml": {
+    "source": "iana"
+  },
+  "application/java-archive": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["jar","war","ear"]
+  },
+  "application/java-serialized-object": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["ser"]
+  },
+  "application/java-vm": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["class"]
+  },
+  "application/javascript": {
+    "source": "iana",
+    "charset": "UTF-8",
+    "compressible": true,
+    "extensions": ["js"]
+  },
+  "application/jose": {
+    "source": "iana"
+  },
+  "application/jose+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/jrd+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/json": {
+    "source": "iana",
+    "charset": "UTF-8",
+    "compressible": true,
+    "extensions": ["json","map"]
+  },
+  "application/json-patch+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/json-seq": {
+    "source": "iana"
+  },
+  "application/json5": {
+    "extensions": ["json5"]
+  },
+  "application/jsonml+json": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["jsonml"]
+  },
+  "application/jwk+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/jwk-set+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/jwt": {
+    "source": "iana"
+  },
+  "application/kpml-request+xml": {
+    "source": "iana"
+  },
+  "application/kpml-response+xml": {
+    "source": "iana"
+  },
+  "application/ld+json": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["jsonld"]
+  },
+  "application/link-format": {
+    "source": "iana"
+  },
+  "application/load-control+xml": {
+    "source": "iana"
+  },
+  "application/lost+xml": {
+    "source": "iana",
+    "extensions": ["lostxml"]
+  },
+  "application/lostsync+xml": {
+    "source": "iana"
+  },
+  "application/lxf": {
+    "source": "iana"
+  },
+  "application/mac-binhex40": {
+    "source": "iana",
+    "extensions": ["hqx"]
+  },
+  "application/mac-compactpro": {
+    "source": "apache",
+    "extensions": ["cpt"]
+  },
+  "application/macwriteii": {
+    "source": "iana"
+  },
+  "application/mads+xml": {
+    "source": "iana",
+    "extensions": ["mads"]
+  },
+  "application/manifest+json": {
+    "charset": "UTF-8",
+    "compressible": true,
+    "extensions": ["webmanifest"]
+  },
+  "application/marc": {
+    "source": "iana",
+    "extensions": ["mrc"]
+  },
+  "application/marcxml+xml": {
+    "source": "iana",
+    "extensions": ["mrcx"]
+  },
+  "application/mathematica": {
+    "source": "iana",
+    "extensions": ["ma","nb","mb"]
+  },
+  "application/mathml+xml": {
+    "source": "iana",
+    "extensions": ["mathml"]
+  },
+  "application/mathml-content+xml": {
+    "source": "iana"
+  },
+  "application/mathml-presentation+xml": {
+    "source": "iana"
+  },
+  "application/mbms-associated-procedure-description+xml": {
+    "source": "iana"
+  },
+  "application/mbms-deregister+xml": {
+    "source": "iana"
+  },
+  "application/mbms-envelope+xml": {
+    "source": "iana"
+  },
+  "application/mbms-msk+xml": {
+    "source": "iana"
+  },
+  "application/mbms-msk-response+xml": {
+    "source": "iana"
+  },
+  "application/mbms-protection-description+xml": {
+    "source": "iana"
+  },
+  "application/mbms-reception-report+xml": {
+    "source": "iana"
+  },
+  "application/mbms-register+xml": {
+    "source": "iana"
+  },
+  "application/mbms-register-response+xml": {
+    "source": "iana"
+  },
+  "application/mbms-schedule+xml": {
+    "source": "iana"
+  },
+  "application/mbms-user-service-description+xml": {
+    "source": "iana"
+  },
+  "application/mbox": {
+    "source": "iana",
+    "extensions": ["mbox"]
+  },
+  "application/media-policy-dataset+xml": {
+    "source": "iana"
+  },
+  "application/media_control+xml": {
+    "source": "iana"
+  },
+  "application/mediaservercontrol+xml": {
+    "source": "iana",
+    "extensions": ["mscml"]
+  },
+  "application/merge-patch+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/metalink+xml": {
+    "source": "apache",
+    "extensions": ["metalink"]
+  },
+  "application/metalink4+xml": {
+    "source": "iana",
+    "extensions": ["meta4"]
+  },
+  "application/mets+xml": {
+    "source": "iana",
+    "extensions": ["mets"]
+  },
+  "application/mf4": {
+    "source": "iana"
+  },
+  "application/mikey": {
+    "source": "iana"
+  },
+  "application/mods+xml": {
+    "source": "iana",
+    "extensions": ["mods"]
+  },
+  "application/moss-keys": {
+    "source": "iana"
+  },
+  "application/moss-signature": {
+    "source": "iana"
+  },
+  "application/mosskey-data": {
+    "source": "iana"
+  },
+  "application/mosskey-request": {
+    "source": "iana"
+  },
+  "application/mp21": {
+    "source": "iana",
+    "extensions": ["m21","mp21"]
+  },
+  "application/mp4": {
+    "source": "iana",
+    "extensions": ["mp4s","m4p"]
+  },
+  "application/mpeg4-generic": {
+    "source": "iana"
+  },
+  "application/mpeg4-iod": {
+    "source": "iana"
+  },
+  "application/mpeg4-iod-xmt": {
+    "source": "iana"
+  },
+  "application/mrb-consumer+xml": {
+    "source": "iana"
+  },
+  "application/mrb-publish+xml": {
+    "source": "iana"
+  },
+  "application/msc-ivr+xml": {
+    "source": "iana"
+  },
+  "application/msc-mixer+xml": {
+    "source": "iana"
+  },
+  "application/msword": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["doc","dot"]
+  },
+  "application/mxf": {
+    "source": "iana",
+    "extensions": ["mxf"]
+  },
+  "application/nasdata": {
+    "source": "iana"
+  },
+  "application/news-checkgroups": {
+    "source": "iana"
+  },
+  "application/news-groupinfo": {
+    "source": "iana"
+  },
+  "application/news-transmission": {
+    "source": "iana"
+  },
+  "application/nlsml+xml": {
+    "source": "iana"
+  },
+  "application/nss": {
+    "source": "iana"
+  },
+  "application/ocsp-request": {
+    "source": "iana"
+  },
+  "application/ocsp-response": {
+    "source": "iana"
+  },
+  "application/octet-stream": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["bin","dms","lrf","mar","so","dist","distz","pkg","bpk","dump","elc","deploy","exe","dll","deb","dmg","iso","img","msi","msp","msm","buffer"]
+  },
+  "application/oda": {
+    "source": "iana",
+    "extensions": ["oda"]
+  },
+  "application/odx": {
+    "source": "iana"
+  },
+  "application/oebps-package+xml": {
+    "source": "iana",
+    "extensions": ["opf"]
+  },
+  "application/ogg": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["ogx"]
+  },
+  "application/omdoc+xml": {
+    "source": "apache",
+    "extensions": ["omdoc"]
+  },
+  "application/onenote": {
+    "source": "apache",
+    "extensions": ["onetoc","onetoc2","onetmp","onepkg"]
+  },
+  "application/oxps": {
+    "source": "iana",
+    "extensions": ["oxps"]
+  },
+  "application/p2p-overlay+xml": {
+    "source": "iana"
+  },
+  "application/parityfec": {
+    "source": "iana"
+  },
+  "application/patch-ops-error+xml": {
+    "source": "iana",
+    "extensions": ["xer"]
+  },
+  "application/pdf": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["pdf"]
+  },
+  "application/pdx": {
+    "source": "iana"
+  },
+  "application/pgp-encrypted": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["pgp"]
+  },
+  "application/pgp-keys": {
+    "source": "iana"
+  },
+  "application/pgp-signature": {
+    "source": "iana",
+    "extensions": ["asc","sig"]
+  },
+  "application/pics-rules": {
+    "source": "apache",
+    "extensions": ["prf"]
+  },
+  "application/pidf+xml": {
+    "source": "iana"
+  },
+  "application/pidf-diff+xml": {
+    "source": "iana"
+  },
+  "application/pkcs10": {
+    "source": "iana",
+    "extensions": ["p10"]
+  },
+  "application/pkcs12": {
+    "source": "iana"
+  },
+  "application/pkcs7-mime": {
+    "source": "iana",
+    "extensions": ["p7m","p7c"]
+  },
+  "application/pkcs7-signature": {
+    "source": "iana",
+    "extensions": ["p7s"]
+  },
+  "application/pkcs8": {
+    "source": "iana",
+    "extensions": ["p8"]
+  },
+  "application/pkix-attr-cert": {
+    "source": "iana",
+    "extensions": ["ac"]
+  },
+  "application/pkix-cert": {
+    "source": "iana",
+    "extensions": ["cer"]
+  },
+  "application/pkix-crl": {
+    "source": "iana",
+    "extensions": ["crl"]
+  },
+  "application/pkix-pkipath": {
+    "source": "iana",
+    "extensions": ["pkipath"]
+  },
+  "application/pkixcmp": {
+    "source": "iana",
+    "extensions": ["pki"]
+  },
+  "application/pls+xml": {
+    "source": "iana",
+    "extensions": ["pls"]
+  },
+  "application/poc-settings+xml": {
+    "source": "iana"
+  },
+  "application/postscript": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["ai","eps","ps"]
+  },
+  "application/provenance+xml": {
+    "source": "iana"
+  },
+  "application/prs.alvestrand.titrax-sheet": {
+    "source": "iana"
+  },
+  "application/prs.cww": {
+    "source": "iana",
+    "extensions": ["cww"]
+  },
+  "application/prs.hpub+zip": {
+    "source": "iana"
+  },
+  "application/prs.nprend": {
+    "source": "iana"
+  },
+  "application/prs.plucker": {
+    "source": "iana"
+  },
+  "application/prs.rdf-xml-crypt": {
+    "source": "iana"
+  },
+  "application/prs.xsf+xml": {
+    "source": "iana"
+  },
+  "application/pskc+xml": {
+    "source": "iana",
+    "extensions": ["pskcxml"]
+  },
+  "application/qsig": {
+    "source": "iana"
+  },
+  "application/raptorfec": {
+    "source": "iana"
+  },
+  "application/rdap+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/rdf+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["rdf"]
+  },
+  "application/reginfo+xml": {
+    "source": "iana",
+    "extensions": ["rif"]
+  },
+  "application/relax-ng-compact-syntax": {
+    "source": "iana",
+    "extensions": ["rnc"]
+  },
+  "application/remote-printing": {
+    "source": "iana"
+  },
+  "application/reputon+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/resource-lists+xml": {
+    "source": "iana",
+    "extensions": ["rl"]
+  },
+  "application/resource-lists-diff+xml": {
+    "source": "iana",
+    "extensions": ["rld"]
+  },
+  "application/rfc+xml": {
+    "source": "iana"
+  },
+  "application/riscos": {
+    "source": "iana"
+  },
+  "application/rlmi+xml": {
+    "source": "iana"
+  },
+  "application/rls-services+xml": {
+    "source": "iana",
+    "extensions": ["rs"]
+  },
+  "application/rpki-ghostbusters": {
+    "source": "iana",
+    "extensions": ["gbr"]
+  },
+  "application/rpki-manifest": {
+    "source": "iana",
+    "extensions": ["mft"]
+  },
+  "application/rpki-roa": {
+    "source": "iana",
+    "extensions": ["roa"]
+  },
+  "application/rpki-updown": {
+    "source": "iana"
+  },
+  "application/rsd+xml": {
+    "source": "apache",
+    "extensions": ["rsd"]
+  },
+  "application/rss+xml": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["rss"]
+  },
+  "application/rtf": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["rtf"]
+  },
+  "application/rtploopback": {
+    "source": "iana"
+  },
+  "application/rtx": {
+    "source": "iana"
+  },
+  "application/samlassertion+xml": {
+    "source": "iana"
+  },
+  "application/samlmetadata+xml": {
+    "source": "iana"
+  },
+  "application/sbml+xml": {
+    "source": "iana",
+    "extensions": ["sbml"]
+  },
+  "application/scaip+xml": {
+    "source": "iana"
+  },
+  "application/scim+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/scvp-cv-request": {
+    "source": "iana",
+    "extensions": ["scq"]
+  },
+  "application/scvp-cv-response": {
+    "source": "iana",
+    "extensions": ["scs"]
+  },
+  "application/scvp-vp-request": {
+    "source": "iana",
+    "extensions": ["spq"]
+  },
+  "application/scvp-vp-response": {
+    "source": "iana",
+    "extensions": ["spp"]
+  },
+  "application/sdp": {
+    "source": "iana",
+    "extensions": ["sdp"]
+  },
+  "application/sep+xml": {
+    "source": "iana"
+  },
+  "application/sep-exi": {
+    "source": "iana"
+  },
+  "application/session-info": {
+    "source": "iana"
+  },
+  "application/set-payment": {
+    "source": "iana"
+  },
+  "application/set-payment-initiation": {
+    "source": "iana",
+    "extensions": ["setpay"]
+  },
+  "application/set-registration": {
+    "source": "iana"
+  },
+  "application/set-registration-initiation": {
+    "source": "iana",
+    "extensions": ["setreg"]
+  },
+  "application/sgml": {
+    "source": "iana"
+  },
+  "application/sgml-open-catalog": {
+    "source": "iana"
+  },
+  "application/shf+xml": {
+    "source": "iana",
+    "extensions": ["shf"]
+  },
+  "application/sieve": {
+    "source": "iana"
+  },
+  "application/simple-filter+xml": {
+    "source": "iana"
+  },
+  "application/simple-message-summary": {
+    "source": "iana"
+  },
+  "application/simplesymbolcontainer": {
+    "source": "iana"
+  },
+  "application/slate": {
+    "source": "iana"
+  },
+  "application/smil": {
+    "source": "iana"
+  },
+  "application/smil+xml": {
+    "source": "iana",
+    "extensions": ["smi","smil"]
+  },
+  "application/smpte336m": {
+    "source": "iana"
+  },
+  "application/soap+fastinfoset": {
+    "source": "iana"
+  },
+  "application/soap+xml": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/sparql-query": {
+    "source": "iana",
+    "extensions": ["rq"]
+  },
+  "application/sparql-results+xml": {
+    "source": "iana",
+    "extensions": ["srx"]
+  },
+  "application/spirits-event+xml": {
+    "source": "iana"
+  },
+  "application/sql": {
+    "source": "iana"
+  },
+  "application/srgs": {
+    "source": "iana",
+    "extensions": ["gram"]
+  },
+  "application/srgs+xml": {
+    "source": "iana",
+    "extensions": ["grxml"]
+  },
+  "application/sru+xml": {
+    "source": "iana",
+    "extensions": ["sru"]
+  },
+  "application/ssdl+xml": {
+    "source": "apache",
+    "extensions": ["ssdl"]
+  },
+  "application/ssml+xml": {
+    "source": "iana",
+    "extensions": ["ssml"]
+  },
+  "application/tamp-apex-update": {
+    "source": "iana"
+  },
+  "application/tamp-apex-update-confirm": {
+    "source": "iana"
+  },
+  "application/tamp-community-update": {
+    "source": "iana"
+  },
+  "application/tamp-community-update-confirm": {
+    "source": "iana"
+  },
+  "application/tamp-error": {
+    "source": "iana"
+  },
+  "application/tamp-sequence-adjust": {
+    "source": "iana"
+  },
+  "application/tamp-sequence-adjust-confirm": {
+    "source": "iana"
+  },
+  "application/tamp-status-query": {
+    "source": "iana"
+  },
+  "application/tamp-status-response": {
+    "source": "iana"
+  },
+  "application/tamp-update": {
+    "source": "iana"
+  },
+  "application/tamp-update-confirm": {
+    "source": "iana"
+  },
+  "application/tar": {
+    "compressible": true
+  },
+  "application/tei+xml": {
+    "source": "iana",
+    "extensions": ["tei","teicorpus"]
+  },
+  "application/thraud+xml": {
+    "source": "iana",
+    "extensions": ["tfi"]
+  },
+  "application/timestamp-query": {
+    "source": "iana"
+  },
+  "application/timestamp-reply": {
+    "source": "iana"
+  },
+  "application/timestamped-data": {
+    "source": "iana",
+    "extensions": ["tsd"]
+  },
+  "application/ttml+xml": {
+    "source": "iana"
+  },
+  "application/tve-trigger": {
+    "source": "iana"
+  },
+  "application/ulpfec": {
+    "source": "iana"
+  },
+  "application/urc-grpsheet+xml": {
+    "source": "iana"
+  },
+  "application/urc-ressheet+xml": {
+    "source": "iana"
+  },
+  "application/urc-targetdesc+xml": {
+    "source": "iana"
+  },
+  "application/urc-uisocketdesc+xml": {
+    "source": "iana"
+  },
+  "application/vcard+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vcard+xml": {
+    "source": "iana"
+  },
+  "application/vemmi": {
+    "source": "iana"
+  },
+  "application/vividence.scriptfile": {
+    "source": "apache"
+  },
+  "application/vnd.3gpp-prose+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp-prose-pc3ch+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.access-transfer-events+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.bsf+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.mid-call+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.pic-bw-large": {
+    "source": "iana",
+    "extensions": ["plb"]
+  },
+  "application/vnd.3gpp.pic-bw-small": {
+    "source": "iana",
+    "extensions": ["psb"]
+  },
+  "application/vnd.3gpp.pic-bw-var": {
+    "source": "iana",
+    "extensions": ["pvb"]
+  },
+  "application/vnd.3gpp.sms": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.srvcc-ext+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.srvcc-info+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.state-and-event-info+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp.ussd+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp2.bcmcsinfo+xml": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp2.sms": {
+    "source": "iana"
+  },
+  "application/vnd.3gpp2.tcap": {
+    "source": "iana",
+    "extensions": ["tcap"]
+  },
+  "application/vnd.3m.post-it-notes": {
+    "source": "iana",
+    "extensions": ["pwn"]
+  },
+  "application/vnd.accpac.simply.aso": {
+    "source": "iana",
+    "extensions": ["aso"]
+  },
+  "application/vnd.accpac.simply.imp": {
+    "source": "iana",
+    "extensions": ["imp"]
+  },
+  "application/vnd.acucobol": {
+    "source": "iana",
+    "extensions": ["acu"]
+  },
+  "application/vnd.acucorp": {
+    "source": "iana",
+    "extensions": ["atc","acutc"]
+  },
+  "application/vnd.adobe.air-application-installer-package+zip": {
+    "source": "apache",
+    "extensions": ["air"]
+  },
+  "application/vnd.adobe.flash.movie": {
+    "source": "iana"
+  },
+  "application/vnd.adobe.formscentral.fcdt": {
+    "source": "iana",
+    "extensions": ["fcdt"]
+  },
+  "application/vnd.adobe.fxp": {
+    "source": "iana",
+    "extensions": ["fxp","fxpl"]
+  },
+  "application/vnd.adobe.partial-upload": {
+    "source": "iana"
+  },
+  "application/vnd.adobe.xdp+xml": {
+    "source": "iana",
+    "extensions": ["xdp"]
+  },
+  "application/vnd.adobe.xfdf": {
+    "source": "iana",
+    "extensions": ["xfdf"]
+  },
+  "application/vnd.aether.imp": {
+    "source": "iana"
+  },
+  "application/vnd.ah-barcode": {
+    "source": "iana"
+  },
+  "application/vnd.ahead.space": {
+    "source": "iana",
+    "extensions": ["ahead"]
+  },
+  "application/vnd.airzip.filesecure.azf": {
+    "source": "iana",
+    "extensions": ["azf"]
+  },
+  "application/vnd.airzip.filesecure.azs": {
+    "source": "iana",
+    "extensions": ["azs"]
+  },
+  "application/vnd.amazon.ebook": {
+    "source": "apache",
+    "extensions": ["azw"]
+  },
+  "application/vnd.americandynamics.acc": {
+    "source": "iana",
+    "extensions": ["acc"]
+  },
+  "application/vnd.amiga.ami": {
+    "source": "iana",
+    "extensions": ["ami"]
+  },
+  "application/vnd.amundsen.maze+xml": {
+    "source": "iana"
+  },
+  "application/vnd.android.package-archive": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["apk"]
+  },
+  "application/vnd.anki": {
+    "source": "iana"
+  },
+  "application/vnd.anser-web-certificate-issue-initiation": {
+    "source": "iana",
+    "extensions": ["cii"]
+  },
+  "application/vnd.anser-web-funds-transfer-initiation": {
+    "source": "apache",
+    "extensions": ["fti"]
+  },
+  "application/vnd.antix.game-component": {
+    "source": "iana",
+    "extensions": ["atx"]
+  },
+  "application/vnd.apache.thrift.binary": {
+    "source": "iana"
+  },
+  "application/vnd.apache.thrift.compact": {
+    "source": "iana"
+  },
+  "application/vnd.apache.thrift.json": {
+    "source": "iana"
+  },
+  "application/vnd.api+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.apple.installer+xml": {
+    "source": "iana",
+    "extensions": ["mpkg"]
+  },
+  "application/vnd.apple.mpegurl": {
+    "source": "iana",
+    "extensions": ["m3u8"]
+  },
+  "application/vnd.apple.pkpass": {
+    "compressible": false,
+    "extensions": ["pkpass"]
+  },
+  "application/vnd.arastra.swi": {
+    "source": "iana"
+  },
+  "application/vnd.aristanetworks.swi": {
+    "source": "iana",
+    "extensions": ["swi"]
+  },
+  "application/vnd.artsquare": {
+    "source": "iana"
+  },
+  "application/vnd.astraea-software.iota": {
+    "source": "iana",
+    "extensions": ["iota"]
+  },
+  "application/vnd.audiograph": {
+    "source": "iana",
+    "extensions": ["aep"]
+  },
+  "application/vnd.autopackage": {
+    "source": "iana"
+  },
+  "application/vnd.avistar+xml": {
+    "source": "iana"
+  },
+  "application/vnd.balsamiq.bmml+xml": {
+    "source": "iana"
+  },
+  "application/vnd.balsamiq.bmpr": {
+    "source": "iana"
+  },
+  "application/vnd.bekitzur-stech+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.biopax.rdf+xml": {
+    "source": "iana"
+  },
+  "application/vnd.blueice.multipass": {
+    "source": "iana",
+    "extensions": ["mpm"]
+  },
+  "application/vnd.bluetooth.ep.oob": {
+    "source": "iana"
+  },
+  "application/vnd.bluetooth.le.oob": {
+    "source": "iana"
+  },
+  "application/vnd.bmi": {
+    "source": "iana",
+    "extensions": ["bmi"]
+  },
+  "application/vnd.businessobjects": {
+    "source": "iana",
+    "extensions": ["rep"]
+  },
+  "application/vnd.cab-jscript": {
+    "source": "iana"
+  },
+  "application/vnd.canon-cpdl": {
+    "source": "iana"
+  },
+  "application/vnd.canon-lips": {
+    "source": "iana"
+  },
+  "application/vnd.cendio.thinlinc.clientconf": {
+    "source": "iana"
+  },
+  "application/vnd.century-systems.tcp_stream": {
+    "source": "iana"
+  },
+  "application/vnd.chemdraw+xml": {
+    "source": "iana",
+    "extensions": ["cdxml"]
+  },
+  "application/vnd.chipnuts.karaoke-mmd": {
+    "source": "iana",
+    "extensions": ["mmd"]
+  },
+  "application/vnd.cinderella": {
+    "source": "iana",
+    "extensions": ["cdy"]
+  },
+  "application/vnd.cirpack.isdn-ext": {
+    "source": "iana"
+  },
+  "application/vnd.citationstyles.style+xml": {
+    "source": "iana"
+  },
+  "application/vnd.claymore": {
+    "source": "iana",
+    "extensions": ["cla"]
+  },
+  "application/vnd.cloanto.rp9": {
+    "source": "iana",
+    "extensions": ["rp9"]
+  },
+  "application/vnd.clonk.c4group": {
+    "source": "iana",
+    "extensions": ["c4g","c4d","c4f","c4p","c4u"]
+  },
+  "application/vnd.cluetrust.cartomobile-config": {
+    "source": "iana",
+    "extensions": ["c11amc"]
+  },
+  "application/vnd.cluetrust.cartomobile-config-pkg": {
+    "source": "iana",
+    "extensions": ["c11amz"]
+  },
+  "application/vnd.coffeescript": {
+    "source": "iana"
+  },
+  "application/vnd.collection+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.collection.doc+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.collection.next+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.commerce-battelle": {
+    "source": "iana"
+  },
+  "application/vnd.commonspace": {
+    "source": "iana",
+    "extensions": ["csp"]
+  },
+  "application/vnd.contact.cmsg": {
+    "source": "iana",
+    "extensions": ["cdbcmsg"]
+  },
+  "application/vnd.cosmocaller": {
+    "source": "iana",
+    "extensions": ["cmc"]
+  },
+  "application/vnd.crick.clicker": {
+    "source": "iana",
+    "extensions": ["clkx"]
+  },
+  "application/vnd.crick.clicker.keyboard": {
+    "source": "iana",
+    "extensions": ["clkk"]
+  },
+  "application/vnd.crick.clicker.palette": {
+    "source": "iana",
+    "extensions": ["clkp"]
+  },
+  "application/vnd.crick.clicker.template": {
+    "source": "iana",
+    "extensions": ["clkt"]
+  },
+  "application/vnd.crick.clicker.wordbank": {
+    "source": "iana",
+    "extensions": ["clkw"]
+  },
+  "application/vnd.criticaltools.wbs+xml": {
+    "source": "iana",
+    "extensions": ["wbs"]
+  },
+  "application/vnd.ctc-posml": {
+    "source": "iana",
+    "extensions": ["pml"]
+  },
+  "application/vnd.ctct.ws+xml": {
+    "source": "iana"
+  },
+  "application/vnd.cups-pdf": {
+    "source": "iana"
+  },
+  "application/vnd.cups-postscript": {
+    "source": "iana"
+  },
+  "application/vnd.cups-ppd": {
+    "source": "iana",
+    "extensions": ["ppd"]
+  },
+  "application/vnd.cups-raster": {
+    "source": "iana"
+  },
+  "application/vnd.cups-raw": {
+    "source": "iana"
+  },
+  "application/vnd.curl": {
+    "source": "iana"
+  },
+  "application/vnd.curl.car": {
+    "source": "apache",
+    "extensions": ["car"]
+  },
+  "application/vnd.curl.pcurl": {
+    "source": "apache",
+    "extensions": ["pcurl"]
+  },
+  "application/vnd.cyan.dean.root+xml": {
+    "source": "iana"
+  },
+  "application/vnd.cybank": {
+    "source": "iana"
+  },
+  "application/vnd.dart": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["dart"]
+  },
+  "application/vnd.data-vision.rdz": {
+    "source": "iana",
+    "extensions": ["rdz"]
+  },
+  "application/vnd.debian.binary-package": {
+    "source": "iana"
+  },
+  "application/vnd.dece.data": {
+    "source": "iana",
+    "extensions": ["uvf","uvvf","uvd","uvvd"]
+  },
+  "application/vnd.dece.ttml+xml": {
+    "source": "iana",
+    "extensions": ["uvt","uvvt"]
+  },
+  "application/vnd.dece.unspecified": {
+    "source": "iana",
+    "extensions": ["uvx","uvvx"]
+  },
+  "application/vnd.dece.zip": {
+    "source": "iana",
+    "extensions": ["uvz","uvvz"]
+  },
+  "application/vnd.denovo.fcselayout-link": {
+    "source": "iana",
+    "extensions": ["fe_launch"]
+  },
+  "application/vnd.desmume-movie": {
+    "source": "iana"
+  },
+  "application/vnd.dir-bi.plate-dl-nosuffix": {
+    "source": "iana"
+  },
+  "application/vnd.dm.delegation+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dna": {
+    "source": "iana",
+    "extensions": ["dna"]
+  },
+  "application/vnd.document+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.dolby.mlp": {
+    "source": "apache",
+    "extensions": ["mlp"]
+  },
+  "application/vnd.dolby.mobile.1": {
+    "source": "iana"
+  },
+  "application/vnd.dolby.mobile.2": {
+    "source": "iana"
+  },
+  "application/vnd.doremir.scorecloud-binary-document": {
+    "source": "iana"
+  },
+  "application/vnd.dpgraph": {
+    "source": "iana",
+    "extensions": ["dpg"]
+  },
+  "application/vnd.dreamfactory": {
+    "source": "iana",
+    "extensions": ["dfac"]
+  },
+  "application/vnd.drive+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.ds-keypoint": {
+    "source": "apache",
+    "extensions": ["kpxx"]
+  },
+  "application/vnd.dtg.local": {
+    "source": "iana"
+  },
+  "application/vnd.dtg.local.flash": {
+    "source": "iana"
+  },
+  "application/vnd.dtg.local.html": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.ait": {
+    "source": "iana",
+    "extensions": ["ait"]
+  },
+  "application/vnd.dvb.dvbj": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.esgcontainer": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.ipdcdftnotifaccess": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.ipdcesgaccess": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.ipdcesgaccess2": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.ipdcesgpdd": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.ipdcroaming": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.iptv.alfec-base": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.iptv.alfec-enhancement": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-aggregate-root+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-container+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-generic+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-ia-msglist+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-ia-registration-request+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-ia-registration-response+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.notif-init+xml": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.pfr": {
+    "source": "iana"
+  },
+  "application/vnd.dvb.service": {
+    "source": "iana",
+    "extensions": ["svc"]
+  },
+  "application/vnd.dxr": {
+    "source": "iana"
+  },
+  "application/vnd.dynageo": {
+    "source": "iana",
+    "extensions": ["geo"]
+  },
+  "application/vnd.dzr": {
+    "source": "iana"
+  },
+  "application/vnd.easykaraoke.cdgdownload": {
+    "source": "iana"
+  },
+  "application/vnd.ecdis-update": {
+    "source": "iana"
+  },
+  "application/vnd.ecowin.chart": {
+    "source": "iana",
+    "extensions": ["mag"]
+  },
+  "application/vnd.ecowin.filerequest": {
+    "source": "iana"
+  },
+  "application/vnd.ecowin.fileupdate": {
+    "source": "iana"
+  },
+  "application/vnd.ecowin.series": {
+    "source": "iana"
+  },
+  "application/vnd.ecowin.seriesrequest": {
+    "source": "iana"
+  },
+  "application/vnd.ecowin.seriesupdate": {
+    "source": "iana"
+  },
+  "application/vnd.emclient.accessrequest+xml": {
+    "source": "iana"
+  },
+  "application/vnd.enliven": {
+    "source": "iana",
+    "extensions": ["nml"]
+  },
+  "application/vnd.enphase.envoy": {
+    "source": "iana"
+  },
+  "application/vnd.eprints.data+xml": {
+    "source": "iana"
+  },
+  "application/vnd.epson.esf": {
+    "source": "iana",
+    "extensions": ["esf"]
+  },
+  "application/vnd.epson.msf": {
+    "source": "iana",
+    "extensions": ["msf"]
+  },
+  "application/vnd.epson.quickanime": {
+    "source": "iana",
+    "extensions": ["qam"]
+  },
+  "application/vnd.epson.salt": {
+    "source": "iana",
+    "extensions": ["slt"]
+  },
+  "application/vnd.epson.ssf": {
+    "source": "iana",
+    "extensions": ["ssf"]
+  },
+  "application/vnd.ericsson.quickcall": {
+    "source": "iana"
+  },
+  "application/vnd.eszigno3+xml": {
+    "source": "iana",
+    "extensions": ["es3","et3"]
+  },
+  "application/vnd.etsi.aoc+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.asic-e+zip": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.asic-s+zip": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.cug+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvcommand+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvdiscovery+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvprofile+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvsad-bc+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvsad-cod+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvsad-npvr+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvservice+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvsync+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.iptvueprofile+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.mcid+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.mheg5": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.overload-control-policy-dataset+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.pstn+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.sci+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.simservs+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.timestamp-token": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.tsl+xml": {
+    "source": "iana"
+  },
+  "application/vnd.etsi.tsl.der": {
+    "source": "iana"
+  },
+  "application/vnd.eudora.data": {
+    "source": "iana"
+  },
+  "application/vnd.ezpix-album": {
+    "source": "iana",
+    "extensions": ["ez2"]
+  },
+  "application/vnd.ezpix-package": {
+    "source": "iana",
+    "extensions": ["ez3"]
+  },
+  "application/vnd.f-secure.mobile": {
+    "source": "iana"
+  },
+  "application/vnd.fastcopy-disk-image": {
+    "source": "iana"
+  },
+  "application/vnd.fdf": {
+    "source": "iana",
+    "extensions": ["fdf"]
+  },
+  "application/vnd.fdsn.mseed": {
+    "source": "iana",
+    "extensions": ["mseed"]
+  },
+  "application/vnd.fdsn.seed": {
+    "source": "iana",
+    "extensions": ["seed","dataless"]
+  },
+  "application/vnd.ffsns": {
+    "source": "iana"
+  },
+  "application/vnd.filmit.zfc": {
+    "source": "iana"
+  },
+  "application/vnd.fints": {
+    "source": "iana"
+  },
+  "application/vnd.firemonkeys.cloudcell": {
+    "source": "iana"
+  },
+  "application/vnd.flographit": {
+    "source": "iana",
+    "extensions": ["gph"]
+  },
+  "application/vnd.fluxtime.clip": {
+    "source": "iana",
+    "extensions": ["ftc"]
+  },
+  "application/vnd.font-fontforge-sfd": {
+    "source": "iana"
+  },
+  "application/vnd.framemaker": {
+    "source": "iana",
+    "extensions": ["fm","frame","maker","book"]
+  },
+  "application/vnd.frogans.fnc": {
+    "source": "iana",
+    "extensions": ["fnc"]
+  },
+  "application/vnd.frogans.ltf": {
+    "source": "iana",
+    "extensions": ["ltf"]
+  },
+  "application/vnd.fsc.weblaunch": {
+    "source": "iana",
+    "extensions": ["fsc"]
+  },
+  "application/vnd.fujitsu.oasys": {
+    "source": "iana",
+    "extensions": ["oas"]
+  },
+  "application/vnd.fujitsu.oasys2": {
+    "source": "iana",
+    "extensions": ["oa2"]
+  },
+  "application/vnd.fujitsu.oasys3": {
+    "source": "iana",
+    "extensions": ["oa3"]
+  },
+  "application/vnd.fujitsu.oasysgp": {
+    "source": "iana",
+    "extensions": ["fg5"]
+  },
+  "application/vnd.fujitsu.oasysprs": {
+    "source": "iana",
+    "extensions": ["bh2"]
+  },
+  "application/vnd.fujixerox.art-ex": {
+    "source": "iana"
+  },
+  "application/vnd.fujixerox.art4": {
+    "source": "iana"
+  },
+  "application/vnd.fujixerox.ddd": {
+    "source": "iana",
+    "extensions": ["ddd"]
+  },
+  "application/vnd.fujixerox.docuworks": {
+    "source": "iana",
+    "extensions": ["xdw"]
+  },
+  "application/vnd.fujixerox.docuworks.binder": {
+    "source": "iana",
+    "extensions": ["xbd"]
+  },
+  "application/vnd.fujixerox.docuworks.container": {
+    "source": "iana"
+  },
+  "application/vnd.fujixerox.hbpl": {
+    "source": "iana"
+  },
+  "application/vnd.fut-misnet": {
+    "source": "iana"
+  },
+  "application/vnd.fuzzysheet": {
+    "source": "iana",
+    "extensions": ["fzs"]
+  },
+  "application/vnd.genomatix.tuxedo": {
+    "source": "iana",
+    "extensions": ["txd"]
+  },
+  "application/vnd.geo+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.geocube+xml": {
+    "source": "iana"
+  },
+  "application/vnd.geogebra.file": {
+    "source": "iana",
+    "extensions": ["ggb"]
+  },
+  "application/vnd.geogebra.tool": {
+    "source": "iana",
+    "extensions": ["ggt"]
+  },
+  "application/vnd.geometry-explorer": {
+    "source": "iana",
+    "extensions": ["gex","gre"]
+  },
+  "application/vnd.geonext": {
+    "source": "iana",
+    "extensions": ["gxt"]
+  },
+  "application/vnd.geoplan": {
+    "source": "iana",
+    "extensions": ["g2w"]
+  },
+  "application/vnd.geospace": {
+    "source": "iana",
+    "extensions": ["g3w"]
+  },
+  "application/vnd.gerber": {
+    "source": "iana"
+  },
+  "application/vnd.globalplatform.card-content-mgt": {
+    "source": "iana"
+  },
+  "application/vnd.globalplatform.card-content-mgt-response": {
+    "source": "iana"
+  },
+  "application/vnd.gmx": {
+    "source": "iana",
+    "extensions": ["gmx"]
+  },
+  "application/vnd.google-apps.document": {
+    "compressible": false,
+    "extensions": ["gdoc"]
+  },
+  "application/vnd.google-apps.presentation": {
+    "compressible": false,
+    "extensions": ["gslides"]
+  },
+  "application/vnd.google-apps.spreadsheet": {
+    "compressible": false,
+    "extensions": ["gsheet"]
+  },
+  "application/vnd.google-earth.kml+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["kml"]
+  },
+  "application/vnd.google-earth.kmz": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["kmz"]
+  },
+  "application/vnd.gov.sk.e-form+xml": {
+    "source": "iana"
+  },
+  "application/vnd.gov.sk.e-form+zip": {
+    "source": "iana"
+  },
+  "application/vnd.gov.sk.xmldatacontainer+xml": {
+    "source": "iana"
+  },
+  "application/vnd.grafeq": {
+    "source": "iana",
+    "extensions": ["gqf","gqs"]
+  },
+  "application/vnd.gridmp": {
+    "source": "iana"
+  },
+  "application/vnd.groove-account": {
+    "source": "iana",
+    "extensions": ["gac"]
+  },
+  "application/vnd.groove-help": {
+    "source": "iana",
+    "extensions": ["ghf"]
+  },
+  "application/vnd.groove-identity-message": {
+    "source": "iana",
+    "extensions": ["gim"]
+  },
+  "application/vnd.groove-injector": {
+    "source": "iana",
+    "extensions": ["grv"]
+  },
+  "application/vnd.groove-tool-message": {
+    "source": "iana",
+    "extensions": ["gtm"]
+  },
+  "application/vnd.groove-tool-template": {
+    "source": "iana",
+    "extensions": ["tpl"]
+  },
+  "application/vnd.groove-vcard": {
+    "source": "iana",
+    "extensions": ["vcg"]
+  },
+  "application/vnd.hal+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.hal+xml": {
+    "source": "iana",
+    "extensions": ["hal"]
+  },
+  "application/vnd.handheld-entertainment+xml": {
+    "source": "iana",
+    "extensions": ["zmm"]
+  },
+  "application/vnd.hbci": {
+    "source": "iana",
+    "extensions": ["hbci"]
+  },
+  "application/vnd.hcl-bireports": {
+    "source": "iana"
+  },
+  "application/vnd.heroku+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.hhe.lesson-player": {
+    "source": "iana",
+    "extensions": ["les"]
+  },
+  "application/vnd.hp-hpgl": {
+    "source": "iana",
+    "extensions": ["hpgl"]
+  },
+  "application/vnd.hp-hpid": {
+    "source": "iana",
+    "extensions": ["hpid"]
+  },
+  "application/vnd.hp-hps": {
+    "source": "iana",
+    "extensions": ["hps"]
+  },
+  "application/vnd.hp-jlyt": {
+    "source": "iana",
+    "extensions": ["jlt"]
+  },
+  "application/vnd.hp-pcl": {
+    "source": "iana",
+    "extensions": ["pcl"]
+  },
+  "application/vnd.hp-pclxl": {
+    "source": "iana",
+    "extensions": ["pclxl"]
+  },
+  "application/vnd.httphone": {
+    "source": "iana"
+  },
+  "application/vnd.hydrostatix.sof-data": {
+    "source": "iana",
+    "extensions": ["sfd-hdstx"]
+  },
+  "application/vnd.hyperdrive+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.hzn-3d-crossword": {
+    "source": "iana"
+  },
+  "application/vnd.ibm.afplinedata": {
+    "source": "iana"
+  },
+  "application/vnd.ibm.electronic-media": {
+    "source": "iana"
+  },
+  "application/vnd.ibm.minipay": {
+    "source": "iana",
+    "extensions": ["mpy"]
+  },
+  "application/vnd.ibm.modcap": {
+    "source": "iana",
+    "extensions": ["afp","listafp","list3820"]
+  },
+  "application/vnd.ibm.rights-management": {
+    "source": "iana",
+    "extensions": ["irm"]
+  },
+  "application/vnd.ibm.secure-container": {
+    "source": "iana",
+    "extensions": ["sc"]
+  },
+  "application/vnd.iccprofile": {
+    "source": "iana",
+    "extensions": ["icc","icm"]
+  },
+  "application/vnd.ieee.1905": {
+    "source": "iana"
+  },
+  "application/vnd.igloader": {
+    "source": "iana",
+    "extensions": ["igl"]
+  },
+  "application/vnd.immervision-ivp": {
+    "source": "iana",
+    "extensions": ["ivp"]
+  },
+  "application/vnd.immervision-ivu": {
+    "source": "iana",
+    "extensions": ["ivu"]
+  },
+  "application/vnd.ims.imsccv1p1": {
+    "source": "iana"
+  },
+  "application/vnd.ims.imsccv1p2": {
+    "source": "iana"
+  },
+  "application/vnd.ims.imsccv1p3": {
+    "source": "iana"
+  },
+  "application/vnd.ims.lis.v2.result+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.ims.lti.v2.toolconsumerprofile+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.ims.lti.v2.toolproxy+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.ims.lti.v2.toolproxy.id+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.ims.lti.v2.toolsettings+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.ims.lti.v2.toolsettings.simple+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.informedcontrol.rms+xml": {
+    "source": "iana"
+  },
+  "application/vnd.informix-visionary": {
+    "source": "iana"
+  },
+  "application/vnd.infotech.project": {
+    "source": "iana"
+  },
+  "application/vnd.infotech.project+xml": {
+    "source": "iana"
+  },
+  "application/vnd.innopath.wamp.notification": {
+    "source": "iana"
+  },
+  "application/vnd.insors.igm": {
+    "source": "iana",
+    "extensions": ["igm"]
+  },
+  "application/vnd.intercon.formnet": {
+    "source": "iana",
+    "extensions": ["xpw","xpx"]
+  },
+  "application/vnd.intergeo": {
+    "source": "iana",
+    "extensions": ["i2g"]
+  },
+  "application/vnd.intertrust.digibox": {
+    "source": "iana"
+  },
+  "application/vnd.intertrust.nncp": {
+    "source": "iana"
+  },
+  "application/vnd.intu.qbo": {
+    "source": "iana",
+    "extensions": ["qbo"]
+  },
+  "application/vnd.intu.qfx": {
+    "source": "iana",
+    "extensions": ["qfx"]
+  },
+  "application/vnd.iptc.g2.catalogitem+xml": {
+    "source": "iana"
+  },
+  "application/vnd.iptc.g2.conceptitem+xml": {
+    "source": "iana"
+  },
+  "application/vnd.iptc.g2.knowledgeitem+xml": {
+    "source": "iana"
+  },
+  "application/vnd.iptc.g2.newsitem+xml": {
+    "source": "iana"
+  },
+  "application/vnd.iptc.g2.newsmessage+xml": {
+    "source": "iana"
+  },
+  "application/vnd.iptc.g2.packageitem+xml": {
+    "source": "iana"
+  },
+  "application/vnd.iptc.g2.planningitem+xml": {
+    "source": "iana"
+  },
+  "application/vnd.ipunplugged.rcprofile": {
+    "source": "iana",
+    "extensions": ["rcprofile"]
+  },
+  "application/vnd.irepository.package+xml": {
+    "source": "iana",
+    "extensions": ["irp"]
+  },
+  "application/vnd.is-xpr": {
+    "source": "iana",
+    "extensions": ["xpr"]
+  },
+  "application/vnd.isac.fcs": {
+    "source": "iana",
+    "extensions": ["fcs"]
+  },
+  "application/vnd.jam": {
+    "source": "iana",
+    "extensions": ["jam"]
+  },
+  "application/vnd.japannet-directory-service": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-jpnstore-wakeup": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-payment-wakeup": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-registration": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-registration-wakeup": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-setstore-wakeup": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-verification": {
+    "source": "iana"
+  },
+  "application/vnd.japannet-verification-wakeup": {
+    "source": "iana"
+  },
+  "application/vnd.jcp.javame.midlet-rms": {
+    "source": "iana",
+    "extensions": ["rms"]
+  },
+  "application/vnd.jisp": {
+    "source": "iana",
+    "extensions": ["jisp"]
+  },
+  "application/vnd.joost.joda-archive": {
+    "source": "iana",
+    "extensions": ["joda"]
+  },
+  "application/vnd.jsk.isdn-ngn": {
+    "source": "iana"
+  },
+  "application/vnd.kahootz": {
+    "source": "iana",
+    "extensions": ["ktz","ktr"]
+  },
+  "application/vnd.kde.karbon": {
+    "source": "iana",
+    "extensions": ["karbon"]
+  },
+  "application/vnd.kde.kchart": {
+    "source": "iana",
+    "extensions": ["chrt"]
+  },
+  "application/vnd.kde.kformula": {
+    "source": "iana",
+    "extensions": ["kfo"]
+  },
+  "application/vnd.kde.kivio": {
+    "source": "iana",
+    "extensions": ["flw"]
+  },
+  "application/vnd.kde.kontour": {
+    "source": "iana",
+    "extensions": ["kon"]
+  },
+  "application/vnd.kde.kpresenter": {
+    "source": "iana",
+    "extensions": ["kpr","kpt"]
+  },
+  "application/vnd.kde.kspread": {
+    "source": "iana",
+    "extensions": ["ksp"]
+  },
+  "application/vnd.kde.kword": {
+    "source": "iana",
+    "extensions": ["kwd","kwt"]
+  },
+  "application/vnd.kenameaapp": {
+    "source": "iana",
+    "extensions": ["htke"]
+  },
+  "application/vnd.kidspiration": {
+    "source": "iana",
+    "extensions": ["kia"]
+  },
+  "application/vnd.kinar": {
+    "source": "iana",
+    "extensions": ["kne","knp"]
+  },
+  "application/vnd.koan": {
+    "source": "iana",
+    "extensions": ["skp","skd","skt","skm"]
+  },
+  "application/vnd.kodak-descriptor": {
+    "source": "iana",
+    "extensions": ["sse"]
+  },
+  "application/vnd.las.las+xml": {
+    "source": "iana",
+    "extensions": ["lasxml"]
+  },
+  "application/vnd.liberty-request+xml": {
+    "source": "iana"
+  },
+  "application/vnd.llamagraphics.life-balance.desktop": {
+    "source": "iana",
+    "extensions": ["lbd"]
+  },
+  "application/vnd.llamagraphics.life-balance.exchange+xml": {
+    "source": "iana",
+    "extensions": ["lbe"]
+  },
+  "application/vnd.lotus-1-2-3": {
+    "source": "iana",
+    "extensions": ["123"]
+  },
+  "application/vnd.lotus-approach": {
+    "source": "iana",
+    "extensions": ["apr"]
+  },
+  "application/vnd.lotus-freelance": {
+    "source": "iana",
+    "extensions": ["pre"]
+  },
+  "application/vnd.lotus-notes": {
+    "source": "iana",
+    "extensions": ["nsf"]
+  },
+  "application/vnd.lotus-organizer": {
+    "source": "iana",
+    "extensions": ["org"]
+  },
+  "application/vnd.lotus-screencam": {
+    "source": "iana",
+    "extensions": ["scm"]
+  },
+  "application/vnd.lotus-wordpro": {
+    "source": "iana",
+    "extensions": ["lwp"]
+  },
+  "application/vnd.macports.portpkg": {
+    "source": "iana",
+    "extensions": ["portpkg"]
+  },
+  "application/vnd.mapbox-vector-tile": {
+    "source": "iana"
+  },
+  "application/vnd.marlin.drm.actiontoken+xml": {
+    "source": "iana"
+  },
+  "application/vnd.marlin.drm.conftoken+xml": {
+    "source": "iana"
+  },
+  "application/vnd.marlin.drm.license+xml": {
+    "source": "iana"
+  },
+  "application/vnd.marlin.drm.mdcf": {
+    "source": "iana"
+  },
+  "application/vnd.mason+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.maxmind.maxmind-db": {
+    "source": "iana"
+  },
+  "application/vnd.mcd": {
+    "source": "iana",
+    "extensions": ["mcd"]
+  },
+  "application/vnd.medcalcdata": {
+    "source": "iana",
+    "extensions": ["mc1"]
+  },
+  "application/vnd.mediastation.cdkey": {
+    "source": "iana",
+    "extensions": ["cdkey"]
+  },
+  "application/vnd.meridian-slingshot": {
+    "source": "iana"
+  },
+  "application/vnd.mfer": {
+    "source": "iana",
+    "extensions": ["mwf"]
+  },
+  "application/vnd.mfmp": {
+    "source": "iana",
+    "extensions": ["mfm"]
+  },
+  "application/vnd.micro+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.micrografx.flo": {
+    "source": "iana",
+    "extensions": ["flo"]
+  },
+  "application/vnd.micrografx.igx": {
+    "source": "iana",
+    "extensions": ["igx"]
+  },
+  "application/vnd.microsoft.portable-executable": {
+    "source": "iana"
+  },
+  "application/vnd.miele+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.mif": {
+    "source": "iana",
+    "extensions": ["mif"]
+  },
+  "application/vnd.minisoft-hp3000-save": {
+    "source": "iana"
+  },
+  "application/vnd.mitsubishi.misty-guard.trustweb": {
+    "source": "iana"
+  },
+  "application/vnd.mobius.daf": {
+    "source": "iana",
+    "extensions": ["daf"]
+  },
+  "application/vnd.mobius.dis": {
+    "source": "iana",
+    "extensions": ["dis"]
+  },
+  "application/vnd.mobius.mbk": {
+    "source": "iana",
+    "extensions": ["mbk"]
+  },
+  "application/vnd.mobius.mqy": {
+    "source": "iana",
+    "extensions": ["mqy"]
+  },
+  "application/vnd.mobius.msl": {
+    "source": "iana",
+    "extensions": ["msl"]
+  },
+  "application/vnd.mobius.plc": {
+    "source": "iana",
+    "extensions": ["plc"]
+  },
+  "application/vnd.mobius.txf": {
+    "source": "iana",
+    "extensions": ["txf"]
+  },
+  "application/vnd.mophun.application": {
+    "source": "iana",
+    "extensions": ["mpn"]
+  },
+  "application/vnd.mophun.certificate": {
+    "source": "iana",
+    "extensions": ["mpc"]
+  },
+  "application/vnd.motorola.flexsuite": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.flexsuite.adsi": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.flexsuite.fis": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.flexsuite.gotap": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.flexsuite.kmr": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.flexsuite.ttc": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.flexsuite.wem": {
+    "source": "iana"
+  },
+  "application/vnd.motorola.iprm": {
+    "source": "iana"
+  },
+  "application/vnd.mozilla.xul+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["xul"]
+  },
+  "application/vnd.ms-3mfdocument": {
+    "source": "iana"
+  },
+  "application/vnd.ms-artgalry": {
+    "source": "iana",
+    "extensions": ["cil"]
+  },
+  "application/vnd.ms-asf": {
+    "source": "iana"
+  },
+  "application/vnd.ms-cab-compressed": {
+    "source": "iana",
+    "extensions": ["cab"]
+  },
+  "application/vnd.ms-color.iccprofile": {
+    "source": "apache"
+  },
+  "application/vnd.ms-excel": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["xls","xlm","xla","xlc","xlt","xlw"]
+  },
+  "application/vnd.ms-excel.addin.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["xlam"]
+  },
+  "application/vnd.ms-excel.sheet.binary.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["xlsb"]
+  },
+  "application/vnd.ms-excel.sheet.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["xlsm"]
+  },
+  "application/vnd.ms-excel.template.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["xltm"]
+  },
+  "application/vnd.ms-fontobject": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["eot"]
+  },
+  "application/vnd.ms-htmlhelp": {
+    "source": "iana",
+    "extensions": ["chm"]
+  },
+  "application/vnd.ms-ims": {
+    "source": "iana",
+    "extensions": ["ims"]
+  },
+  "application/vnd.ms-lrm": {
+    "source": "iana",
+    "extensions": ["lrm"]
+  },
+  "application/vnd.ms-office.activex+xml": {
+    "source": "iana"
+  },
+  "application/vnd.ms-officetheme": {
+    "source": "iana",
+    "extensions": ["thmx"]
+  },
+  "application/vnd.ms-opentype": {
+    "source": "apache",
+    "compressible": true
+  },
+  "application/vnd.ms-package.obfuscated-opentype": {
+    "source": "apache"
+  },
+  "application/vnd.ms-pki.seccat": {
+    "source": "apache",
+    "extensions": ["cat"]
+  },
+  "application/vnd.ms-pki.stl": {
+    "source": "apache",
+    "extensions": ["stl"]
+  },
+  "application/vnd.ms-playready.initiator+xml": {
+    "source": "iana"
+  },
+  "application/vnd.ms-powerpoint": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["ppt","pps","pot"]
+  },
+  "application/vnd.ms-powerpoint.addin.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["ppam"]
+  },
+  "application/vnd.ms-powerpoint.presentation.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["pptm"]
+  },
+  "application/vnd.ms-powerpoint.slide.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["sldm"]
+  },
+  "application/vnd.ms-powerpoint.slideshow.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["ppsm"]
+  },
+  "application/vnd.ms-powerpoint.template.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["potm"]
+  },
+  "application/vnd.ms-printdevicecapabilities+xml": {
+    "source": "iana"
+  },
+  "application/vnd.ms-printing.printticket+xml": {
+    "source": "apache"
+  },
+  "application/vnd.ms-project": {
+    "source": "iana",
+    "extensions": ["mpp","mpt"]
+  },
+  "application/vnd.ms-tnef": {
+    "source": "iana"
+  },
+  "application/vnd.ms-windows.devicepairing": {
+    "source": "iana"
+  },
+  "application/vnd.ms-windows.nwprinting.oob": {
+    "source": "iana"
+  },
+  "application/vnd.ms-windows.printerpairing": {
+    "source": "iana"
+  },
+  "application/vnd.ms-windows.wsd.oob": {
+    "source": "iana"
+  },
+  "application/vnd.ms-wmdrm.lic-chlg-req": {
+    "source": "iana"
+  },
+  "application/vnd.ms-wmdrm.lic-resp": {
+    "source": "iana"
+  },
+  "application/vnd.ms-wmdrm.meter-chlg-req": {
+    "source": "iana"
+  },
+  "application/vnd.ms-wmdrm.meter-resp": {
+    "source": "iana"
+  },
+  "application/vnd.ms-word.document.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["docm"]
+  },
+  "application/vnd.ms-word.template.macroenabled.12": {
+    "source": "iana",
+    "extensions": ["dotm"]
+  },
+  "application/vnd.ms-works": {
+    "source": "iana",
+    "extensions": ["wps","wks","wcm","wdb"]
+  },
+  "application/vnd.ms-wpl": {
+    "source": "iana",
+    "extensions": ["wpl"]
+  },
+  "application/vnd.ms-xpsdocument": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["xps"]
+  },
+  "application/vnd.msa-disk-image": {
+    "source": "iana"
+  },
+  "application/vnd.mseq": {
+    "source": "iana",
+    "extensions": ["mseq"]
+  },
+  "application/vnd.msign": {
+    "source": "iana"
+  },
+  "application/vnd.multiad.creator": {
+    "source": "iana"
+  },
+  "application/vnd.multiad.creator.cif": {
+    "source": "iana"
+  },
+  "application/vnd.music-niff": {
+    "source": "iana"
+  },
+  "application/vnd.musician": {
+    "source": "iana",
+    "extensions": ["mus"]
+  },
+  "application/vnd.muvee.style": {
+    "source": "iana",
+    "extensions": ["msty"]
+  },
+  "application/vnd.mynfc": {
+    "source": "iana",
+    "extensions": ["taglet"]
+  },
+  "application/vnd.ncd.control": {
+    "source": "iana"
+  },
+  "application/vnd.ncd.reference": {
+    "source": "iana"
+  },
+  "application/vnd.nervana": {
+    "source": "iana"
+  },
+  "application/vnd.netfpx": {
+    "source": "iana"
+  },
+  "application/vnd.neurolanguage.nlu": {
+    "source": "iana",
+    "extensions": ["nlu"]
+  },
+  "application/vnd.nintendo.nitro.rom": {
+    "source": "iana"
+  },
+  "application/vnd.nintendo.snes.rom": {
+    "source": "iana"
+  },
+  "application/vnd.nitf": {
+    "source": "iana",
+    "extensions": ["ntf","nitf"]
+  },
+  "application/vnd.noblenet-directory": {
+    "source": "iana",
+    "extensions": ["nnd"]
+  },
+  "application/vnd.noblenet-sealer": {
+    "source": "iana",
+    "extensions": ["nns"]
+  },
+  "application/vnd.noblenet-web": {
+    "source": "iana",
+    "extensions": ["nnw"]
+  },
+  "application/vnd.nokia.catalogs": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.conml+wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.conml+xml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.iptv.config+xml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.isds-radio-presets": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.landmark+wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.landmark+xml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.landmarkcollection+xml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.n-gage.ac+xml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.n-gage.data": {
+    "source": "iana",
+    "extensions": ["ngdat"]
+  },
+  "application/vnd.nokia.n-gage.symbian.install": {
+    "source": "iana",
+    "extensions": ["n-gage"]
+  },
+  "application/vnd.nokia.ncd": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.pcd+wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.pcd+xml": {
+    "source": "iana"
+  },
+  "application/vnd.nokia.radio-preset": {
+    "source": "iana",
+    "extensions": ["rpst"]
+  },
+  "application/vnd.nokia.radio-presets": {
+    "source": "iana",
+    "extensions": ["rpss"]
+  },
+  "application/vnd.novadigm.edm": {
+    "source": "iana",
+    "extensions": ["edm"]
+  },
+  "application/vnd.novadigm.edx": {
+    "source": "iana",
+    "extensions": ["edx"]
+  },
+  "application/vnd.novadigm.ext": {
+    "source": "iana",
+    "extensions": ["ext"]
+  },
+  "application/vnd.ntt-local.content-share": {
+    "source": "iana"
+  },
+  "application/vnd.ntt-local.file-transfer": {
+    "source": "iana"
+  },
+  "application/vnd.ntt-local.ogw_remote-access": {
+    "source": "iana"
+  },
+  "application/vnd.ntt-local.sip-ta_remote": {
+    "source": "iana"
+  },
+  "application/vnd.ntt-local.sip-ta_tcp_stream": {
+    "source": "iana"
+  },
+  "application/vnd.oasis.opendocument.chart": {
+    "source": "iana",
+    "extensions": ["odc"]
+  },
+  "application/vnd.oasis.opendocument.chart-template": {
+    "source": "iana",
+    "extensions": ["otc"]
+  },
+  "application/vnd.oasis.opendocument.database": {
+    "source": "iana",
+    "extensions": ["odb"]
+  },
+  "application/vnd.oasis.opendocument.formula": {
+    "source": "iana",
+    "extensions": ["odf"]
+  },
+  "application/vnd.oasis.opendocument.formula-template": {
+    "source": "iana",
+    "extensions": ["odft"]
+  },
+  "application/vnd.oasis.opendocument.graphics": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["odg"]
+  },
+  "application/vnd.oasis.opendocument.graphics-template": {
+    "source": "iana",
+    "extensions": ["otg"]
+  },
+  "application/vnd.oasis.opendocument.image": {
+    "source": "iana",
+    "extensions": ["odi"]
+  },
+  "application/vnd.oasis.opendocument.image-template": {
+    "source": "iana",
+    "extensions": ["oti"]
+  },
+  "application/vnd.oasis.opendocument.presentation": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["odp"]
+  },
+  "application/vnd.oasis.opendocument.presentation-template": {
+    "source": "iana",
+    "extensions": ["otp"]
+  },
+  "application/vnd.oasis.opendocument.spreadsheet": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["ods"]
+  },
+  "application/vnd.oasis.opendocument.spreadsheet-template": {
+    "source": "iana",
+    "extensions": ["ots"]
+  },
+  "application/vnd.oasis.opendocument.text": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["odt"]
+  },
+  "application/vnd.oasis.opendocument.text-master": {
+    "source": "iana",
+    "extensions": ["odm"]
+  },
+  "application/vnd.oasis.opendocument.text-template": {
+    "source": "iana",
+    "extensions": ["ott"]
+  },
+  "application/vnd.oasis.opendocument.text-web": {
+    "source": "iana",
+    "extensions": ["oth"]
+  },
+  "application/vnd.obn": {
+    "source": "iana"
+  },
+  "application/vnd.oftn.l10n+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.oipf.contentaccessdownload+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.contentaccessstreaming+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.cspg-hexbinary": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.dae.svg+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.dae.xhtml+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.mippvcontrolmessage+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.pae.gem": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.spdiscovery+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.spdlist+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.ueprofile+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oipf.userprofile+xml": {
+    "source": "iana"
+  },
+  "application/vnd.olpc-sugar": {
+    "source": "iana",
+    "extensions": ["xo"]
+  },
+  "application/vnd.oma-scws-config": {
+    "source": "iana"
+  },
+  "application/vnd.oma-scws-http-request": {
+    "source": "iana"
+  },
+  "application/vnd.oma-scws-http-response": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.associated-procedure-parameter+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.drm-trigger+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.imd+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.ltkm": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.notification+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.provisioningtrigger": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.sgboot": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.sgdd+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.sgdu": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.simple-symbol-container": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.smartcard-trigger+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.sprov+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.bcast.stkm": {
+    "source": "iana"
+  },
+  "application/vnd.oma.cab-address-book+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.cab-feature-handler+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.cab-pcc+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.cab-subs-invite+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.cab-user-prefs+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.dcd": {
+    "source": "iana"
+  },
+  "application/vnd.oma.dcdc": {
+    "source": "iana"
+  },
+  "application/vnd.oma.dd2+xml": {
+    "source": "iana",
+    "extensions": ["dd2"]
+  },
+  "application/vnd.oma.drm.risd+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.group-usage-list+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.pal+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.poc.detailed-progress-report+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.poc.final-report+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.poc.groups+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.poc.invocation-descriptor+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.poc.optimized-progress-report+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.push": {
+    "source": "iana"
+  },
+  "application/vnd.oma.scidm.messages+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oma.xcap-directory+xml": {
+    "source": "iana"
+  },
+  "application/vnd.omads-email+xml": {
+    "source": "iana"
+  },
+  "application/vnd.omads-file+xml": {
+    "source": "iana"
+  },
+  "application/vnd.omads-folder+xml": {
+    "source": "iana"
+  },
+  "application/vnd.omaloc-supl-init": {
+    "source": "iana"
+  },
+  "application/vnd.openblox.game+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openblox.game-binary": {
+    "source": "iana"
+  },
+  "application/vnd.openeye.oeb": {
+    "source": "iana"
+  },
+  "application/vnd.openofficeorg.extension": {
+    "source": "apache",
+    "extensions": ["oxt"]
+  },
+  "application/vnd.openxmlformats-officedocument.custom-properties+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.customxmlproperties+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawing+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawingml.chart+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawingml.diagramcolors+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawingml.diagramdata+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawingml.diagramlayout+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.drawingml.diagramstyle+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.extended-properties+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml-template": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.commentauthors+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.comments+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.handoutmaster+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.notesmaster+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.notesslide+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["pptx"]
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.presprops+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slide": {
+    "source": "iana",
+    "extensions": ["sldx"]
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slide+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slidelayout+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slidemaster+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slideshow": {
+    "source": "iana",
+    "extensions": ["ppsx"]
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.slideupdateinfo+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.tablestyles+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.tags+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.template": {
+    "source": "apache",
+    "extensions": ["potx"]
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.viewprops+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml-template": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.calcchain+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.externallink+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotcachedefinition+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotcacherecords+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.pivottable+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.querytable+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.revisionheaders+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.revisionlog+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedstrings+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["xlsx"]
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetmetadata+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.tablesinglecells+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.template": {
+    "source": "apache",
+    "extensions": ["xltx"]
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.usernames+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.volatiledependencies+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.theme+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.themeoverride+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.vmldrawing": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml-template": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["docx"]
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.fonttable+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.template": {
+    "source": "apache",
+    "extensions": ["dotx"]
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.websettings+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-package.core-properties+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml": {
+    "source": "iana"
+  },
+  "application/vnd.openxmlformats-package.relationships+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oracle.resource+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.orange.indata": {
+    "source": "iana"
+  },
+  "application/vnd.osa.netdeploy": {
+    "source": "iana"
+  },
+  "application/vnd.osgeo.mapguide.package": {
+    "source": "iana",
+    "extensions": ["mgp"]
+  },
+  "application/vnd.osgi.bundle": {
+    "source": "iana"
+  },
+  "application/vnd.osgi.dp": {
+    "source": "iana",
+    "extensions": ["dp"]
+  },
+  "application/vnd.osgi.subsystem": {
+    "source": "iana",
+    "extensions": ["esa"]
+  },
+  "application/vnd.otps.ct-kip+xml": {
+    "source": "iana"
+  },
+  "application/vnd.oxli.countgraph": {
+    "source": "iana"
+  },
+  "application/vnd.pagerduty+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.palm": {
+    "source": "iana",
+    "extensions": ["pdb","pqa","oprc"]
+  },
+  "application/vnd.panoply": {
+    "source": "iana"
+  },
+  "application/vnd.paos+xml": {
+    "source": "iana"
+  },
+  "application/vnd.paos.xml": {
+    "source": "apache"
+  },
+  "application/vnd.pawaafile": {
+    "source": "iana",
+    "extensions": ["paw"]
+  },
+  "application/vnd.pcos": {
+    "source": "iana"
+  },
+  "application/vnd.pg.format": {
+    "source": "iana",
+    "extensions": ["str"]
+  },
+  "application/vnd.pg.osasli": {
+    "source": "iana",
+    "extensions": ["ei6"]
+  },
+  "application/vnd.piaccess.application-licence": {
+    "source": "iana"
+  },
+  "application/vnd.picsel": {
+    "source": "iana",
+    "extensions": ["efif"]
+  },
+  "application/vnd.pmi.widget": {
+    "source": "iana",
+    "extensions": ["wg"]
+  },
+  "application/vnd.poc.group-advertisement+xml": {
+    "source": "iana"
+  },
+  "application/vnd.pocketlearn": {
+    "source": "iana",
+    "extensions": ["plf"]
+  },
+  "application/vnd.powerbuilder6": {
+    "source": "iana",
+    "extensions": ["pbd"]
+  },
+  "application/vnd.powerbuilder6-s": {
+    "source": "iana"
+  },
+  "application/vnd.powerbuilder7": {
+    "source": "iana"
+  },
+  "application/vnd.powerbuilder7-s": {
+    "source": "iana"
+  },
+  "application/vnd.powerbuilder75": {
+    "source": "iana"
+  },
+  "application/vnd.powerbuilder75-s": {
+    "source": "iana"
+  },
+  "application/vnd.preminet": {
+    "source": "iana"
+  },
+  "application/vnd.previewsystems.box": {
+    "source": "iana",
+    "extensions": ["box"]
+  },
+  "application/vnd.proteus.magazine": {
+    "source": "iana",
+    "extensions": ["mgz"]
+  },
+  "application/vnd.publishare-delta-tree": {
+    "source": "iana",
+    "extensions": ["qps"]
+  },
+  "application/vnd.pvi.ptid1": {
+    "source": "iana",
+    "extensions": ["ptid"]
+  },
+  "application/vnd.pwg-multiplexed": {
+    "source": "iana"
+  },
+  "application/vnd.pwg-xhtml-print+xml": {
+    "source": "iana"
+  },
+  "application/vnd.qualcomm.brew-app-res": {
+    "source": "iana"
+  },
+  "application/vnd.quark.quarkxpress": {
+    "source": "iana",
+    "extensions": ["qxd","qxt","qwd","qwt","qxl","qxb"]
+  },
+  "application/vnd.quobject-quoxdocument": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.moml+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-audit+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-audit-conf+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-audit-conn+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-audit-dialog+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-audit-stream+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-conf+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog-base+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog-fax-detect+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog-fax-sendrecv+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog-group+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog-speech+xml": {
+    "source": "iana"
+  },
+  "application/vnd.radisys.msml-dialog-transform+xml": {
+    "source": "iana"
+  },
+  "application/vnd.rainstor.data": {
+    "source": "iana"
+  },
+  "application/vnd.rapid": {
+    "source": "iana"
+  },
+  "application/vnd.realvnc.bed": {
+    "source": "iana",
+    "extensions": ["bed"]
+  },
+  "application/vnd.recordare.musicxml": {
+    "source": "iana",
+    "extensions": ["mxl"]
+  },
+  "application/vnd.recordare.musicxml+xml": {
+    "source": "iana",
+    "extensions": ["musicxml"]
+  },
+  "application/vnd.renlearn.rlprint": {
+    "source": "iana"
+  },
+  "application/vnd.rig.cryptonote": {
+    "source": "iana",
+    "extensions": ["cryptonote"]
+  },
+  "application/vnd.rim.cod": {
+    "source": "apache",
+    "extensions": ["cod"]
+  },
+  "application/vnd.rn-realmedia": {
+    "source": "apache",
+    "extensions": ["rm"]
+  },
+  "application/vnd.rn-realmedia-vbr": {
+    "source": "apache",
+    "extensions": ["rmvb"]
+  },
+  "application/vnd.route66.link66+xml": {
+    "source": "iana",
+    "extensions": ["link66"]
+  },
+  "application/vnd.rs-274x": {
+    "source": "iana"
+  },
+  "application/vnd.ruckus.download": {
+    "source": "iana"
+  },
+  "application/vnd.s3sms": {
+    "source": "iana"
+  },
+  "application/vnd.sailingtracker.track": {
+    "source": "iana",
+    "extensions": ["st"]
+  },
+  "application/vnd.sbm.cid": {
+    "source": "iana"
+  },
+  "application/vnd.sbm.mid2": {
+    "source": "iana"
+  },
+  "application/vnd.scribus": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.3df": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.csf": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.doc": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.eml": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.mht": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.net": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.ppt": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.tiff": {
+    "source": "iana"
+  },
+  "application/vnd.sealed.xls": {
+    "source": "iana"
+  },
+  "application/vnd.sealedmedia.softseal.html": {
+    "source": "iana"
+  },
+  "application/vnd.sealedmedia.softseal.pdf": {
+    "source": "iana"
+  },
+  "application/vnd.seemail": {
+    "source": "iana",
+    "extensions": ["see"]
+  },
+  "application/vnd.sema": {
+    "source": "iana",
+    "extensions": ["sema"]
+  },
+  "application/vnd.semd": {
+    "source": "iana",
+    "extensions": ["semd"]
+  },
+  "application/vnd.semf": {
+    "source": "iana",
+    "extensions": ["semf"]
+  },
+  "application/vnd.shana.informed.formdata": {
+    "source": "iana",
+    "extensions": ["ifm"]
+  },
+  "application/vnd.shana.informed.formtemplate": {
+    "source": "iana",
+    "extensions": ["itp"]
+  },
+  "application/vnd.shana.informed.interchange": {
+    "source": "iana",
+    "extensions": ["iif"]
+  },
+  "application/vnd.shana.informed.package": {
+    "source": "iana",
+    "extensions": ["ipk"]
+  },
+  "application/vnd.simtech-mindmapper": {
+    "source": "iana",
+    "extensions": ["twd","twds"]
+  },
+  "application/vnd.siren+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.smaf": {
+    "source": "iana",
+    "extensions": ["mmf"]
+  },
+  "application/vnd.smart.notebook": {
+    "source": "iana"
+  },
+  "application/vnd.smart.teacher": {
+    "source": "iana",
+    "extensions": ["teacher"]
+  },
+  "application/vnd.software602.filler.form+xml": {
+    "source": "iana"
+  },
+  "application/vnd.software602.filler.form-xml-zip": {
+    "source": "iana"
+  },
+  "application/vnd.solent.sdkm+xml": {
+    "source": "iana",
+    "extensions": ["sdkm","sdkd"]
+  },
+  "application/vnd.spotfire.dxp": {
+    "source": "iana",
+    "extensions": ["dxp"]
+  },
+  "application/vnd.spotfire.sfs": {
+    "source": "iana",
+    "extensions": ["sfs"]
+  },
+  "application/vnd.sss-cod": {
+    "source": "iana"
+  },
+  "application/vnd.sss-dtf": {
+    "source": "iana"
+  },
+  "application/vnd.sss-ntf": {
+    "source": "iana"
+  },
+  "application/vnd.stardivision.calc": {
+    "source": "apache",
+    "extensions": ["sdc"]
+  },
+  "application/vnd.stardivision.draw": {
+    "source": "apache",
+    "extensions": ["sda"]
+  },
+  "application/vnd.stardivision.impress": {
+    "source": "apache",
+    "extensions": ["sdd"]
+  },
+  "application/vnd.stardivision.math": {
+    "source": "apache",
+    "extensions": ["smf"]
+  },
+  "application/vnd.stardivision.writer": {
+    "source": "apache",
+    "extensions": ["sdw","vor"]
+  },
+  "application/vnd.stardivision.writer-global": {
+    "source": "apache",
+    "extensions": ["sgl"]
+  },
+  "application/vnd.stepmania.package": {
+    "source": "iana",
+    "extensions": ["smzip"]
+  },
+  "application/vnd.stepmania.stepchart": {
+    "source": "iana",
+    "extensions": ["sm"]
+  },
+  "application/vnd.street-stream": {
+    "source": "iana"
+  },
+  "application/vnd.sun.wadl+xml": {
+    "source": "iana"
+  },
+  "application/vnd.sun.xml.calc": {
+    "source": "apache",
+    "extensions": ["sxc"]
+  },
+  "application/vnd.sun.xml.calc.template": {
+    "source": "apache",
+    "extensions": ["stc"]
+  },
+  "application/vnd.sun.xml.draw": {
+    "source": "apache",
+    "extensions": ["sxd"]
+  },
+  "application/vnd.sun.xml.draw.template": {
+    "source": "apache",
+    "extensions": ["std"]
+  },
+  "application/vnd.sun.xml.impress": {
+    "source": "apache",
+    "extensions": ["sxi"]
+  },
+  "application/vnd.sun.xml.impress.template": {
+    "source": "apache",
+    "extensions": ["sti"]
+  },
+  "application/vnd.sun.xml.math": {
+    "source": "apache",
+    "extensions": ["sxm"]
+  },
+  "application/vnd.sun.xml.writer": {
+    "source": "apache",
+    "extensions": ["sxw"]
+  },
+  "application/vnd.sun.xml.writer.global": {
+    "source": "apache",
+    "extensions": ["sxg"]
+  },
+  "application/vnd.sun.xml.writer.template": {
+    "source": "apache",
+    "extensions": ["stw"]
+  },
+  "application/vnd.sus-calendar": {
+    "source": "iana",
+    "extensions": ["sus","susp"]
+  },
+  "application/vnd.svd": {
+    "source": "iana",
+    "extensions": ["svd"]
+  },
+  "application/vnd.swiftview-ics": {
+    "source": "iana"
+  },
+  "application/vnd.symbian.install": {
+    "source": "apache",
+    "extensions": ["sis","sisx"]
+  },
+  "application/vnd.syncml+xml": {
+    "source": "iana",
+    "extensions": ["xsm"]
+  },
+  "application/vnd.syncml.dm+wbxml": {
+    "source": "iana",
+    "extensions": ["bdm"]
+  },
+  "application/vnd.syncml.dm+xml": {
+    "source": "iana",
+    "extensions": ["xdm"]
+  },
+  "application/vnd.syncml.dm.notification": {
+    "source": "iana"
+  },
+  "application/vnd.syncml.dmddf+wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.syncml.dmddf+xml": {
+    "source": "iana"
+  },
+  "application/vnd.syncml.dmtnds+wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.syncml.dmtnds+xml": {
+    "source": "iana"
+  },
+  "application/vnd.syncml.ds.notification": {
+    "source": "iana"
+  },
+  "application/vnd.tao.intent-module-archive": {
+    "source": "iana",
+    "extensions": ["tao"]
+  },
+  "application/vnd.tcpdump.pcap": {
+    "source": "iana",
+    "extensions": ["pcap","cap","dmp"]
+  },
+  "application/vnd.tmd.mediaflex.api+xml": {
+    "source": "iana"
+  },
+  "application/vnd.tml": {
+    "source": "iana"
+  },
+  "application/vnd.tmobile-livetv": {
+    "source": "iana",
+    "extensions": ["tmo"]
+  },
+  "application/vnd.trid.tpt": {
+    "source": "iana",
+    "extensions": ["tpt"]
+  },
+  "application/vnd.triscape.mxs": {
+    "source": "iana",
+    "extensions": ["mxs"]
+  },
+  "application/vnd.trueapp": {
+    "source": "iana",
+    "extensions": ["tra"]
+  },
+  "application/vnd.truedoc": {
+    "source": "iana"
+  },
+  "application/vnd.ubisoft.webplayer": {
+    "source": "iana"
+  },
+  "application/vnd.ufdl": {
+    "source": "iana",
+    "extensions": ["ufd","ufdl"]
+  },
+  "application/vnd.uiq.theme": {
+    "source": "iana",
+    "extensions": ["utz"]
+  },
+  "application/vnd.umajin": {
+    "source": "iana",
+    "extensions": ["umj"]
+  },
+  "application/vnd.unity": {
+    "source": "iana",
+    "extensions": ["unityweb"]
+  },
+  "application/vnd.uoml+xml": {
+    "source": "iana",
+    "extensions": ["uoml"]
+  },
+  "application/vnd.uplanet.alert": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.alert-wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.bearer-choice": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.bearer-choice-wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.cacheop": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.cacheop-wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.channel": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.channel-wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.list": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.list-wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.listcmd": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.listcmd-wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.uplanet.signal": {
+    "source": "iana"
+  },
+  "application/vnd.uri-map": {
+    "source": "iana"
+  },
+  "application/vnd.valve.source.material": {
+    "source": "iana"
+  },
+  "application/vnd.vcx": {
+    "source": "iana",
+    "extensions": ["vcx"]
+  },
+  "application/vnd.vd-study": {
+    "source": "iana"
+  },
+  "application/vnd.vectorworks": {
+    "source": "iana"
+  },
+  "application/vnd.verimatrix.vcas": {
+    "source": "iana"
+  },
+  "application/vnd.vidsoft.vidconference": {
+    "source": "iana"
+  },
+  "application/vnd.visio": {
+    "source": "iana",
+    "extensions": ["vsd","vst","vss","vsw"]
+  },
+  "application/vnd.visionary": {
+    "source": "iana",
+    "extensions": ["vis"]
+  },
+  "application/vnd.vividence.scriptfile": {
+    "source": "iana"
+  },
+  "application/vnd.vsf": {
+    "source": "iana",
+    "extensions": ["vsf"]
+  },
+  "application/vnd.wap.sic": {
+    "source": "iana"
+  },
+  "application/vnd.wap.slc": {
+    "source": "iana"
+  },
+  "application/vnd.wap.wbxml": {
+    "source": "iana",
+    "extensions": ["wbxml"]
+  },
+  "application/vnd.wap.wmlc": {
+    "source": "iana",
+    "extensions": ["wmlc"]
+  },
+  "application/vnd.wap.wmlscriptc": {
+    "source": "iana",
+    "extensions": ["wmlsc"]
+  },
+  "application/vnd.webturbo": {
+    "source": "iana",
+    "extensions": ["wtb"]
+  },
+  "application/vnd.wfa.p2p": {
+    "source": "iana"
+  },
+  "application/vnd.wfa.wsc": {
+    "source": "iana"
+  },
+  "application/vnd.windows.devicepairing": {
+    "source": "iana"
+  },
+  "application/vnd.wmc": {
+    "source": "iana"
+  },
+  "application/vnd.wmf.bootstrap": {
+    "source": "iana"
+  },
+  "application/vnd.wolfram.mathematica": {
+    "source": "iana"
+  },
+  "application/vnd.wolfram.mathematica.package": {
+    "source": "iana"
+  },
+  "application/vnd.wolfram.player": {
+    "source": "iana",
+    "extensions": ["nbp"]
+  },
+  "application/vnd.wordperfect": {
+    "source": "iana",
+    "extensions": ["wpd"]
+  },
+  "application/vnd.wqd": {
+    "source": "iana",
+    "extensions": ["wqd"]
+  },
+  "application/vnd.wrq-hp3000-labelled": {
+    "source": "iana"
+  },
+  "application/vnd.wt.stf": {
+    "source": "iana",
+    "extensions": ["stf"]
+  },
+  "application/vnd.wv.csp+wbxml": {
+    "source": "iana"
+  },
+  "application/vnd.wv.csp+xml": {
+    "source": "iana"
+  },
+  "application/vnd.wv.ssp+xml": {
+    "source": "iana"
+  },
+  "application/vnd.xacml+json": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/vnd.xara": {
+    "source": "iana",
+    "extensions": ["xar"]
+  },
+  "application/vnd.xfdl": {
+    "source": "iana",
+    "extensions": ["xfdl"]
+  },
+  "application/vnd.xfdl.webform": {
+    "source": "iana"
+  },
+  "application/vnd.xmi+xml": {
+    "source": "iana"
+  },
+  "application/vnd.xmpie.cpkg": {
+    "source": "iana"
+  },
+  "application/vnd.xmpie.dpkg": {
+    "source": "iana"
+  },
+  "application/vnd.xmpie.plan": {
+    "source": "iana"
+  },
+  "application/vnd.xmpie.ppkg": {
+    "source": "iana"
+  },
+  "application/vnd.xmpie.xlim": {
+    "source": "iana"
+  },
+  "application/vnd.yamaha.hv-dic": {
+    "source": "iana",
+    "extensions": ["hvd"]
+  },
+  "application/vnd.yamaha.hv-script": {
+    "source": "iana",
+    "extensions": ["hvs"]
+  },
+  "application/vnd.yamaha.hv-voice": {
+    "source": "iana",
+    "extensions": ["hvp"]
+  },
+  "application/vnd.yamaha.openscoreformat": {
+    "source": "iana",
+    "extensions": ["osf"]
+  },
+  "application/vnd.yamaha.openscoreformat.osfpvg+xml": {
+    "source": "iana",
+    "extensions": ["osfpvg"]
+  },
+  "application/vnd.yamaha.remote-setup": {
+    "source": "iana"
+  },
+  "application/vnd.yamaha.smaf-audio": {
+    "source": "iana",
+    "extensions": ["saf"]
+  },
+  "application/vnd.yamaha.smaf-phrase": {
+    "source": "iana",
+    "extensions": ["spf"]
+  },
+  "application/vnd.yamaha.through-ngn": {
+    "source": "iana"
+  },
+  "application/vnd.yamaha.tunnel-udpencap": {
+    "source": "iana"
+  },
+  "application/vnd.yaoweme": {
+    "source": "iana"
+  },
+  "application/vnd.yellowriver-custom-menu": {
+    "source": "iana",
+    "extensions": ["cmp"]
+  },
+  "application/vnd.zul": {
+    "source": "iana",
+    "extensions": ["zir","zirz"]
+  },
+  "application/vnd.zzazz.deck+xml": {
+    "source": "iana",
+    "extensions": ["zaz"]
+  },
+  "application/voicexml+xml": {
+    "source": "iana",
+    "extensions": ["vxml"]
+  },
+  "application/vq-rtcpxr": {
+    "source": "iana"
+  },
+  "application/watcherinfo+xml": {
+    "source": "iana"
+  },
+  "application/whoispp-query": {
+    "source": "iana"
+  },
+  "application/whoispp-response": {
+    "source": "iana"
+  },
+  "application/widget": {
+    "source": "iana",
+    "extensions": ["wgt"]
+  },
+  "application/winhlp": {
+    "source": "apache",
+    "extensions": ["hlp"]
+  },
+  "application/wita": {
+    "source": "iana"
+  },
+  "application/wordperfect5.1": {
+    "source": "iana"
+  },
+  "application/wsdl+xml": {
+    "source": "iana",
+    "extensions": ["wsdl"]
+  },
+  "application/wspolicy+xml": {
+    "source": "iana",
+    "extensions": ["wspolicy"]
+  },
+  "application/x-7z-compressed": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["7z"]
+  },
+  "application/x-abiword": {
+    "source": "apache",
+    "extensions": ["abw"]
+  },
+  "application/x-ace-compressed": {
+    "source": "apache",
+    "extensions": ["ace"]
+  },
+  "application/x-amf": {
+    "source": "apache"
+  },
+  "application/x-apple-diskimage": {
+    "source": "apache",
+    "extensions": ["dmg"]
+  },
+  "application/x-authorware-bin": {
+    "source": "apache",
+    "extensions": ["aab","x32","u32","vox"]
+  },
+  "application/x-authorware-map": {
+    "source": "apache",
+    "extensions": ["aam"]
+  },
+  "application/x-authorware-seg": {
+    "source": "apache",
+    "extensions": ["aas"]
+  },
+  "application/x-bcpio": {
+    "source": "apache",
+    "extensions": ["bcpio"]
+  },
+  "application/x-bdoc": {
+    "compressible": false,
+    "extensions": ["bdoc"]
+  },
+  "application/x-bittorrent": {
+    "source": "apache",
+    "extensions": ["torrent"]
+  },
+  "application/x-blorb": {
+    "source": "apache",
+    "extensions": ["blb","blorb"]
+  },
+  "application/x-bzip": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["bz"]
+  },
+  "application/x-bzip2": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["bz2","boz"]
+  },
+  "application/x-cbr": {
+    "source": "apache",
+    "extensions": ["cbr","cba","cbt","cbz","cb7"]
+  },
+  "application/x-cdlink": {
+    "source": "apache",
+    "extensions": ["vcd"]
+  },
+  "application/x-cfs-compressed": {
+    "source": "apache",
+    "extensions": ["cfs"]
+  },
+  "application/x-chat": {
+    "source": "apache",
+    "extensions": ["chat"]
+  },
+  "application/x-chess-pgn": {
+    "source": "apache",
+    "extensions": ["pgn"]
+  },
+  "application/x-chrome-extension": {
+    "extensions": ["crx"]
+  },
+  "application/x-cocoa": {
+    "source": "nginx",
+    "extensions": ["cco"]
+  },
+  "application/x-compress": {
+    "source": "apache"
+  },
+  "application/x-conference": {
+    "source": "apache",
+    "extensions": ["nsc"]
+  },
+  "application/x-cpio": {
+    "source": "apache",
+    "extensions": ["cpio"]
+  },
+  "application/x-csh": {
+    "source": "apache",
+    "extensions": ["csh"]
+  },
+  "application/x-deb": {
+    "compressible": false
+  },
+  "application/x-debian-package": {
+    "source": "apache",
+    "extensions": ["deb","udeb"]
+  },
+  "application/x-dgc-compressed": {
+    "source": "apache",
+    "extensions": ["dgc"]
+  },
+  "application/x-director": {
+    "source": "apache",
+    "extensions": ["dir","dcr","dxr","cst","cct","cxt","w3d","fgd","swa"]
+  },
+  "application/x-doom": {
+    "source": "apache",
+    "extensions": ["wad"]
+  },
+  "application/x-dtbncx+xml": {
+    "source": "apache",
+    "extensions": ["ncx"]
+  },
+  "application/x-dtbook+xml": {
+    "source": "apache",
+    "extensions": ["dtb"]
+  },
+  "application/x-dtbresource+xml": {
+    "source": "apache",
+    "extensions": ["res"]
+  },
+  "application/x-dvi": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["dvi"]
+  },
+  "application/x-envoy": {
+    "source": "apache",
+    "extensions": ["evy"]
+  },
+  "application/x-eva": {
+    "source": "apache",
+    "extensions": ["eva"]
+  },
+  "application/x-font-bdf": {
+    "source": "apache",
+    "extensions": ["bdf"]
+  },
+  "application/x-font-dos": {
+    "source": "apache"
+  },
+  "application/x-font-framemaker": {
+    "source": "apache"
+  },
+  "application/x-font-ghostscript": {
+    "source": "apache",
+    "extensions": ["gsf"]
+  },
+  "application/x-font-libgrx": {
+    "source": "apache"
+  },
+  "application/x-font-linux-psf": {
+    "source": "apache",
+    "extensions": ["psf"]
+  },
+  "application/x-font-otf": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["otf"]
+  },
+  "application/x-font-pcf": {
+    "source": "apache",
+    "extensions": ["pcf"]
+  },
+  "application/x-font-snf": {
+    "source": "apache",
+    "extensions": ["snf"]
+  },
+  "application/x-font-speedo": {
+    "source": "apache"
+  },
+  "application/x-font-sunos-news": {
+    "source": "apache"
+  },
+  "application/x-font-ttf": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["ttf","ttc"]
+  },
+  "application/x-font-type1": {
+    "source": "apache",
+    "extensions": ["pfa","pfb","pfm","afm"]
+  },
+  "application/x-font-vfont": {
+    "source": "apache"
+  },
+  "application/x-freearc": {
+    "source": "apache",
+    "extensions": ["arc"]
+  },
+  "application/x-futuresplash": {
+    "source": "apache",
+    "extensions": ["spl"]
+  },
+  "application/x-gca-compressed": {
+    "source": "apache",
+    "extensions": ["gca"]
+  },
+  "application/x-glulx": {
+    "source": "apache",
+    "extensions": ["ulx"]
+  },
+  "application/x-gnumeric": {
+    "source": "apache",
+    "extensions": ["gnumeric"]
+  },
+  "application/x-gramps-xml": {
+    "source": "apache",
+    "extensions": ["gramps"]
+  },
+  "application/x-gtar": {
+    "source": "apache",
+    "extensions": ["gtar"]
+  },
+  "application/x-gzip": {
+    "source": "apache"
+  },
+  "application/x-hdf": {
+    "source": "apache",
+    "extensions": ["hdf"]
+  },
+  "application/x-httpd-php": {
+    "compressible": true,
+    "extensions": ["php"]
+  },
+  "application/x-install-instructions": {
+    "source": "apache",
+    "extensions": ["install"]
+  },
+  "application/x-iso9660-image": {
+    "source": "apache",
+    "extensions": ["iso"]
+  },
+  "application/x-java-archive-diff": {
+    "source": "nginx",
+    "extensions": ["jardiff"]
+  },
+  "application/x-java-jnlp-file": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["jnlp"]
+  },
+  "application/x-javascript": {
+    "compressible": true
+  },
+  "application/x-latex": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["latex"]
+  },
+  "application/x-lua-bytecode": {
+    "extensions": ["luac"]
+  },
+  "application/x-lzh-compressed": {
+    "source": "apache",
+    "extensions": ["lzh","lha"]
+  },
+  "application/x-makeself": {
+    "source": "nginx",
+    "extensions": ["run"]
+  },
+  "application/x-mie": {
+    "source": "apache",
+    "extensions": ["mie"]
+  },
+  "application/x-mobipocket-ebook": {
+    "source": "apache",
+    "extensions": ["prc","mobi"]
+  },
+  "application/x-mpegurl": {
+    "compressible": false
+  },
+  "application/x-ms-application": {
+    "source": "apache",
+    "extensions": ["application"]
+  },
+  "application/x-ms-shortcut": {
+    "source": "apache",
+    "extensions": ["lnk"]
+  },
+  "application/x-ms-wmd": {
+    "source": "apache",
+    "extensions": ["wmd"]
+  },
+  "application/x-ms-wmz": {
+    "source": "apache",
+    "extensions": ["wmz"]
+  },
+  "application/x-ms-xbap": {
+    "source": "apache",
+    "extensions": ["xbap"]
+  },
+  "application/x-msaccess": {
+    "source": "apache",
+    "extensions": ["mdb"]
+  },
+  "application/x-msbinder": {
+    "source": "apache",
+    "extensions": ["obd"]
+  },
+  "application/x-mscardfile": {
+    "source": "apache",
+    "extensions": ["crd"]
+  },
+  "application/x-msclip": {
+    "source": "apache",
+    "extensions": ["clp"]
+  },
+  "application/x-msdos-program": {
+    "extensions": ["exe"]
+  },
+  "application/x-msdownload": {
+    "source": "apache",
+    "extensions": ["exe","dll","com","bat","msi"]
+  },
+  "application/x-msmediaview": {
+    "source": "apache",
+    "extensions": ["mvb","m13","m14"]
+  },
+  "application/x-msmetafile": {
+    "source": "apache",
+    "extensions": ["wmf","wmz","emf","emz"]
+  },
+  "application/x-msmoney": {
+    "source": "apache",
+    "extensions": ["mny"]
+  },
+  "application/x-mspublisher": {
+    "source": "apache",
+    "extensions": ["pub"]
+  },
+  "application/x-msschedule": {
+    "source": "apache",
+    "extensions": ["scd"]
+  },
+  "application/x-msterminal": {
+    "source": "apache",
+    "extensions": ["trm"]
+  },
+  "application/x-mswrite": {
+    "source": "apache",
+    "extensions": ["wri"]
+  },
+  "application/x-netcdf": {
+    "source": "apache",
+    "extensions": ["nc","cdf"]
+  },
+  "application/x-ns-proxy-autoconfig": {
+    "compressible": true,
+    "extensions": ["pac"]
+  },
+  "application/x-nzb": {
+    "source": "apache",
+    "extensions": ["nzb"]
+  },
+  "application/x-perl": {
+    "source": "nginx",
+    "extensions": ["pl","pm"]
+  },
+  "application/x-pilot": {
+    "source": "nginx",
+    "extensions": ["prc","pdb"]
+  },
+  "application/x-pkcs12": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["p12","pfx"]
+  },
+  "application/x-pkcs7-certificates": {
+    "source": "apache",
+    "extensions": ["p7b","spc"]
+  },
+  "application/x-pkcs7-certreqresp": {
+    "source": "apache",
+    "extensions": ["p7r"]
+  },
+  "application/x-rar-compressed": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["rar"]
+  },
+  "application/x-redhat-package-manager": {
+    "source": "nginx",
+    "extensions": ["rpm"]
+  },
+  "application/x-research-info-systems": {
+    "source": "apache",
+    "extensions": ["ris"]
+  },
+  "application/x-sea": {
+    "source": "nginx",
+    "extensions": ["sea"]
+  },
+  "application/x-sh": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["sh"]
+  },
+  "application/x-shar": {
+    "source": "apache",
+    "extensions": ["shar"]
+  },
+  "application/x-shockwave-flash": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["swf"]
+  },
+  "application/x-silverlight-app": {
+    "source": "apache",
+    "extensions": ["xap"]
+  },
+  "application/x-sql": {
+    "source": "apache",
+    "extensions": ["sql"]
+  },
+  "application/x-stuffit": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["sit"]
+  },
+  "application/x-stuffitx": {
+    "source": "apache",
+    "extensions": ["sitx"]
+  },
+  "application/x-subrip": {
+    "source": "apache",
+    "extensions": ["srt"]
+  },
+  "application/x-sv4cpio": {
+    "source": "apache",
+    "extensions": ["sv4cpio"]
+  },
+  "application/x-sv4crc": {
+    "source": "apache",
+    "extensions": ["sv4crc"]
+  },
+  "application/x-t3vm-image": {
+    "source": "apache",
+    "extensions": ["t3"]
+  },
+  "application/x-tads": {
+    "source": "apache",
+    "extensions": ["gam"]
+  },
+  "application/x-tar": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["tar"]
+  },
+  "application/x-tcl": {
+    "source": "apache",
+    "extensions": ["tcl","tk"]
+  },
+  "application/x-tex": {
+    "source": "apache",
+    "extensions": ["tex"]
+  },
+  "application/x-tex-tfm": {
+    "source": "apache",
+    "extensions": ["tfm"]
+  },
+  "application/x-texinfo": {
+    "source": "apache",
+    "extensions": ["texinfo","texi"]
+  },
+  "application/x-tgif": {
+    "source": "apache",
+    "extensions": ["obj"]
+  },
+  "application/x-ustar": {
+    "source": "apache",
+    "extensions": ["ustar"]
+  },
+  "application/x-wais-source": {
+    "source": "apache",
+    "extensions": ["src"]
+  },
+  "application/x-web-app-manifest+json": {
+    "compressible": true,
+    "extensions": ["webapp"]
+  },
+  "application/x-www-form-urlencoded": {
+    "source": "iana",
+    "compressible": true
+  },
+  "application/x-x509-ca-cert": {
+    "source": "apache",
+    "extensions": ["der","crt","pem"]
+  },
+  "application/x-xfig": {
+    "source": "apache",
+    "extensions": ["fig"]
+  },
+  "application/x-xliff+xml": {
+    "source": "apache",
+    "extensions": ["xlf"]
+  },
+  "application/x-xpinstall": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["xpi"]
+  },
+  "application/x-xz": {
+    "source": "apache",
+    "extensions": ["xz"]
+  },
+  "application/x-zmachine": {
+    "source": "apache",
+    "extensions": ["z1","z2","z3","z4","z5","z6","z7","z8"]
+  },
+  "application/x400-bp": {
+    "source": "iana"
+  },
+  "application/xacml+xml": {
+    "source": "iana"
+  },
+  "application/xaml+xml": {
+    "source": "apache",
+    "extensions": ["xaml"]
+  },
+  "application/xcap-att+xml": {
+    "source": "iana"
+  },
+  "application/xcap-caps+xml": {
+    "source": "iana"
+  },
+  "application/xcap-diff+xml": {
+    "source": "iana",
+    "extensions": ["xdf"]
+  },
+  "application/xcap-el+xml": {
+    "source": "iana"
+  },
+  "application/xcap-error+xml": {
+    "source": "iana"
+  },
+  "application/xcap-ns+xml": {
+    "source": "iana"
+  },
+  "application/xcon-conference-info+xml": {
+    "source": "iana"
+  },
+  "application/xcon-conference-info-diff+xml": {
+    "source": "iana"
+  },
+  "application/xenc+xml": {
+    "source": "iana",
+    "extensions": ["xenc"]
+  },
+  "application/xhtml+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["xhtml","xht"]
+  },
+  "application/xhtml-voice+xml": {
+    "source": "apache"
+  },
+  "application/xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["xml","xsl","xsd"]
+  },
+  "application/xml-dtd": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["dtd"]
+  },
+  "application/xml-external-parsed-entity": {
+    "source": "iana"
+  },
+  "application/xml-patch+xml": {
+    "source": "iana"
+  },
+  "application/xmpp+xml": {
+    "source": "iana"
+  },
+  "application/xop+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["xop"]
+  },
+  "application/xproc+xml": {
+    "source": "apache",
+    "extensions": ["xpl"]
+  },
+  "application/xslt+xml": {
+    "source": "iana",
+    "extensions": ["xslt"]
+  },
+  "application/xspf+xml": {
+    "source": "apache",
+    "extensions": ["xspf"]
+  },
+  "application/xv+xml": {
+    "source": "iana",
+    "extensions": ["mxml","xhvml","xvml","xvm"]
+  },
+  "application/yang": {
+    "source": "iana",
+    "extensions": ["yang"]
+  },
+  "application/yin+xml": {
+    "source": "iana",
+    "extensions": ["yin"]
+  },
+  "application/zip": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["zip"]
+  },
+  "application/zlib": {
+    "source": "iana"
+  },
+  "audio/1d-interleaved-parityfec": {
+    "source": "iana"
+  },
+  "audio/32kadpcm": {
+    "source": "iana"
+  },
+  "audio/3gpp": {
+    "source": "iana"
+  },
+  "audio/3gpp2": {
+    "source": "iana"
+  },
+  "audio/ac3": {
+    "source": "iana"
+  },
+  "audio/adpcm": {
+    "source": "apache",
+    "extensions": ["adp"]
+  },
+  "audio/amr": {
+    "source": "iana"
+  },
+  "audio/amr-wb": {
+    "source": "iana"
+  },
+  "audio/amr-wb+": {
+    "source": "iana"
+  },
+  "audio/aptx": {
+    "source": "iana"
+  },
+  "audio/asc": {
+    "source": "iana"
+  },
+  "audio/atrac-advanced-lossless": {
+    "source": "iana"
+  },
+  "audio/atrac-x": {
+    "source": "iana"
+  },
+  "audio/atrac3": {
+    "source": "iana"
+  },
+  "audio/basic": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["au","snd"]
+  },
+  "audio/bv16": {
+    "source": "iana"
+  },
+  "audio/bv32": {
+    "source": "iana"
+  },
+  "audio/clearmode": {
+    "source": "iana"
+  },
+  "audio/cn": {
+    "source": "iana"
+  },
+  "audio/dat12": {
+    "source": "iana"
+  },
+  "audio/dls": {
+    "source": "iana"
+  },
+  "audio/dsr-es201108": {
+    "source": "iana"
+  },
+  "audio/dsr-es202050": {
+    "source": "iana"
+  },
+  "audio/dsr-es202211": {
+    "source": "iana"
+  },
+  "audio/dsr-es202212": {
+    "source": "iana"
+  },
+  "audio/dv": {
+    "source": "iana"
+  },
+  "audio/dvi4": {
+    "source": "iana"
+  },
+  "audio/eac3": {
+    "source": "iana"
+  },
+  "audio/encaprtp": {
+    "source": "iana"
+  },
+  "audio/evrc": {
+    "source": "iana"
+  },
+  "audio/evrc-qcp": {
+    "source": "iana"
+  },
+  "audio/evrc0": {
+    "source": "iana"
+  },
+  "audio/evrc1": {
+    "source": "iana"
+  },
+  "audio/evrcb": {
+    "source": "iana"
+  },
+  "audio/evrcb0": {
+    "source": "iana"
+  },
+  "audio/evrcb1": {
+    "source": "iana"
+  },
+  "audio/evrcnw": {
+    "source": "iana"
+  },
+  "audio/evrcnw0": {
+    "source": "iana"
+  },
+  "audio/evrcnw1": {
+    "source": "iana"
+  },
+  "audio/evrcwb": {
+    "source": "iana"
+  },
+  "audio/evrcwb0": {
+    "source": "iana"
+  },
+  "audio/evrcwb1": {
+    "source": "iana"
+  },
+  "audio/evs": {
+    "source": "iana"
+  },
+  "audio/fwdred": {
+    "source": "iana"
+  },
+  "audio/g711-0": {
+    "source": "iana"
+  },
+  "audio/g719": {
+    "source": "iana"
+  },
+  "audio/g722": {
+    "source": "iana"
+  },
+  "audio/g7221": {
+    "source": "iana"
+  },
+  "audio/g723": {
+    "source": "iana"
+  },
+  "audio/g726-16": {
+    "source": "iana"
+  },
+  "audio/g726-24": {
+    "source": "iana"
+  },
+  "audio/g726-32": {
+    "source": "iana"
+  },
+  "audio/g726-40": {
+    "source": "iana"
+  },
+  "audio/g728": {
+    "source": "iana"
+  },
+  "audio/g729": {
+    "source": "iana"
+  },
+  "audio/g7291": {
+    "source": "iana"
+  },
+  "audio/g729d": {
+    "source": "iana"
+  },
+  "audio/g729e": {
+    "source": "iana"
+  },
+  "audio/gsm": {
+    "source": "iana"
+  },
+  "audio/gsm-efr": {
+    "source": "iana"
+  },
+  "audio/gsm-hr-08": {
+    "source": "iana"
+  },
+  "audio/ilbc": {
+    "source": "iana"
+  },
+  "audio/ip-mr_v2.5": {
+    "source": "iana"
+  },
+  "audio/isac": {
+    "source": "apache"
+  },
+  "audio/l16": {
+    "source": "iana"
+  },
+  "audio/l20": {
+    "source": "iana"
+  },
+  "audio/l24": {
+    "source": "iana",
+    "compressible": false
+  },
+  "audio/l8": {
+    "source": "iana"
+  },
+  "audio/lpc": {
+    "source": "iana"
+  },
+  "audio/midi": {
+    "source": "apache",
+    "extensions": ["mid","midi","kar","rmi"]
+  },
+  "audio/mobile-xmf": {
+    "source": "iana"
+  },
+  "audio/mp4": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["mp4a","m4a"]
+  },
+  "audio/mp4a-latm": {
+    "source": "iana"
+  },
+  "audio/mpa": {
+    "source": "iana"
+  },
+  "audio/mpa-robust": {
+    "source": "iana"
+  },
+  "audio/mpeg": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["mpga","mp2","mp2a","mp3","m2a","m3a"]
+  },
+  "audio/mpeg4-generic": {
+    "source": "iana"
+  },
+  "audio/musepack": {
+    "source": "apache"
+  },
+  "audio/ogg": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["oga","ogg","spx"]
+  },
+  "audio/opus": {
+    "source": "iana"
+  },
+  "audio/parityfec": {
+    "source": "iana"
+  },
+  "audio/pcma": {
+    "source": "iana"
+  },
+  "audio/pcma-wb": {
+    "source": "iana"
+  },
+  "audio/pcmu": {
+    "source": "iana"
+  },
+  "audio/pcmu-wb": {
+    "source": "iana"
+  },
+  "audio/prs.sid": {
+    "source": "iana"
+  },
+  "audio/qcelp": {
+    "source": "iana"
+  },
+  "audio/raptorfec": {
+    "source": "iana"
+  },
+  "audio/red": {
+    "source": "iana"
+  },
+  "audio/rtp-enc-aescm128": {
+    "source": "iana"
+  },
+  "audio/rtp-midi": {
+    "source": "iana"
+  },
+  "audio/rtploopback": {
+    "source": "iana"
+  },
+  "audio/rtx": {
+    "source": "iana"
+  },
+  "audio/s3m": {
+    "source": "apache",
+    "extensions": ["s3m"]
+  },
+  "audio/silk": {
+    "source": "apache",
+    "extensions": ["sil"]
+  },
+  "audio/smv": {
+    "source": "iana"
+  },
+  "audio/smv-qcp": {
+    "source": "iana"
+  },
+  "audio/smv0": {
+    "source": "iana"
+  },
+  "audio/sp-midi": {
+    "source": "iana"
+  },
+  "audio/speex": {
+    "source": "iana"
+  },
+  "audio/t140c": {
+    "source": "iana"
+  },
+  "audio/t38": {
+    "source": "iana"
+  },
+  "audio/telephone-event": {
+    "source": "iana"
+  },
+  "audio/tone": {
+    "source": "iana"
+  },
+  "audio/uemclip": {
+    "source": "iana"
+  },
+  "audio/ulpfec": {
+    "source": "iana"
+  },
+  "audio/vdvi": {
+    "source": "iana"
+  },
+  "audio/vmr-wb": {
+    "source": "iana"
+  },
+  "audio/vnd.3gpp.iufp": {
+    "source": "iana"
+  },
+  "audio/vnd.4sb": {
+    "source": "iana"
+  },
+  "audio/vnd.audiokoz": {
+    "source": "iana"
+  },
+  "audio/vnd.celp": {
+    "source": "iana"
+  },
+  "audio/vnd.cisco.nse": {
+    "source": "iana"
+  },
+  "audio/vnd.cmles.radio-events": {
+    "source": "iana"
+  },
+  "audio/vnd.cns.anp1": {
+    "source": "iana"
+  },
+  "audio/vnd.cns.inf1": {
+    "source": "iana"
+  },
+  "audio/vnd.dece.audio": {
+    "source": "iana",
+    "extensions": ["uva","uvva"]
+  },
+  "audio/vnd.digital-winds": {
+    "source": "iana",
+    "extensions": ["eol"]
+  },
+  "audio/vnd.dlna.adts": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.heaac.1": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.heaac.2": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.mlp": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.mps": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.pl2": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.pl2x": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.pl2z": {
+    "source": "iana"
+  },
+  "audio/vnd.dolby.pulse.1": {
+    "source": "iana"
+  },
+  "audio/vnd.dra": {
+    "source": "iana",
+    "extensions": ["dra"]
+  },
+  "audio/vnd.dts": {
+    "source": "iana",
+    "extensions": ["dts"]
+  },
+  "audio/vnd.dts.hd": {
+    "source": "iana",
+    "extensions": ["dtshd"]
+  },
+  "audio/vnd.dvb.file": {
+    "source": "iana"
+  },
+  "audio/vnd.everad.plj": {
+    "source": "iana"
+  },
+  "audio/vnd.hns.audio": {
+    "source": "iana"
+  },
+  "audio/vnd.lucent.voice": {
+    "source": "iana",
+    "extensions": ["lvp"]
+  },
+  "audio/vnd.ms-playready.media.pya": {
+    "source": "iana",
+    "extensions": ["pya"]
+  },
+  "audio/vnd.nokia.mobile-xmf": {
+    "source": "iana"
+  },
+  "audio/vnd.nortel.vbk": {
+    "source": "iana"
+  },
+  "audio/vnd.nuera.ecelp4800": {
+    "source": "iana",
+    "extensions": ["ecelp4800"]
+  },
+  "audio/vnd.nuera.ecelp7470": {
+    "source": "iana",
+    "extensions": ["ecelp7470"]
+  },
+  "audio/vnd.nuera.ecelp9600": {
+    "source": "iana",
+    "extensions": ["ecelp9600"]
+  },
+  "audio/vnd.octel.sbc": {
+    "source": "iana"
+  },
+  "audio/vnd.qcelp": {
+    "source": "iana"
+  },
+  "audio/vnd.rhetorex.32kadpcm": {
+    "source": "iana"
+  },
+  "audio/vnd.rip": {
+    "source": "iana",
+    "extensions": ["rip"]
+  },
+  "audio/vnd.rn-realaudio": {
+    "compressible": false
+  },
+  "audio/vnd.sealedmedia.softseal.mpeg": {
+    "source": "iana"
+  },
+  "audio/vnd.vmx.cvsd": {
+    "source": "iana"
+  },
+  "audio/vnd.wave": {
+    "compressible": false
+  },
+  "audio/vorbis": {
+    "source": "iana",
+    "compressible": false
+  },
+  "audio/vorbis-config": {
+    "source": "iana"
+  },
+  "audio/wav": {
+    "compressible": false,
+    "extensions": ["wav"]
+  },
+  "audio/wave": {
+    "compressible": false,
+    "extensions": ["wav"]
+  },
+  "audio/webm": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["weba"]
+  },
+  "audio/x-aac": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["aac"]
+  },
+  "audio/x-aiff": {
+    "source": "apache",
+    "extensions": ["aif","aiff","aifc"]
+  },
+  "audio/x-caf": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["caf"]
+  },
+  "audio/x-flac": {
+    "source": "apache",
+    "extensions": ["flac"]
+  },
+  "audio/x-m4a": {
+    "source": "nginx",
+    "extensions": ["m4a"]
+  },
+  "audio/x-matroska": {
+    "source": "apache",
+    "extensions": ["mka"]
+  },
+  "audio/x-mpegurl": {
+    "source": "apache",
+    "extensions": ["m3u"]
+  },
+  "audio/x-ms-wax": {
+    "source": "apache",
+    "extensions": ["wax"]
+  },
+  "audio/x-ms-wma": {
+    "source": "apache",
+    "extensions": ["wma"]
+  },
+  "audio/x-pn-realaudio": {
+    "source": "apache",
+    "extensions": ["ram","ra"]
+  },
+  "audio/x-pn-realaudio-plugin": {
+    "source": "apache",
+    "extensions": ["rmp"]
+  },
+  "audio/x-realaudio": {
+    "source": "nginx",
+    "extensions": ["ra"]
+  },
+  "audio/x-tta": {
+    "source": "apache"
+  },
+  "audio/x-wav": {
+    "source": "apache",
+    "extensions": ["wav"]
+  },
+  "audio/xm": {
+    "source": "apache",
+    "extensions": ["xm"]
+  },
+  "chemical/x-cdx": {
+    "source": "apache",
+    "extensions": ["cdx"]
+  },
+  "chemical/x-cif": {
+    "source": "apache",
+    "extensions": ["cif"]
+  },
+  "chemical/x-cmdf": {
+    "source": "apache",
+    "extensions": ["cmdf"]
+  },
+  "chemical/x-cml": {
+    "source": "apache",
+    "extensions": ["cml"]
+  },
+  "chemical/x-csml": {
+    "source": "apache",
+    "extensions": ["csml"]
+  },
+  "chemical/x-pdb": {
+    "source": "apache"
+  },
+  "chemical/x-xyz": {
+    "source": "apache",
+    "extensions": ["xyz"]
+  },
+  "font/opentype": {
+    "compressible": true,
+    "extensions": ["otf"]
+  },
+  "image/bmp": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["bmp"]
+  },
+  "image/cgm": {
+    "source": "iana",
+    "extensions": ["cgm"]
+  },
+  "image/fits": {
+    "source": "iana"
+  },
+  "image/g3fax": {
+    "source": "iana",
+    "extensions": ["g3"]
+  },
+  "image/gif": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["gif"]
+  },
+  "image/ief": {
+    "source": "iana",
+    "extensions": ["ief"]
+  },
+  "image/jp2": {
+    "source": "iana"
+  },
+  "image/jpeg": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["jpeg","jpg","jpe"]
+  },
+  "image/jpm": {
+    "source": "iana"
+  },
+  "image/jpx": {
+    "source": "iana"
+  },
+  "image/ktx": {
+    "source": "iana",
+    "extensions": ["ktx"]
+  },
+  "image/naplps": {
+    "source": "iana"
+  },
+  "image/pjpeg": {
+    "compressible": false
+  },
+  "image/png": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["png"]
+  },
+  "image/prs.btif": {
+    "source": "iana",
+    "extensions": ["btif"]
+  },
+  "image/prs.pti": {
+    "source": "iana"
+  },
+  "image/pwg-raster": {
+    "source": "iana"
+  },
+  "image/sgi": {
+    "source": "apache",
+    "extensions": ["sgi"]
+  },
+  "image/svg+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["svg","svgz"]
+  },
+  "image/t38": {
+    "source": "iana"
+  },
+  "image/tiff": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["tiff","tif"]
+  },
+  "image/tiff-fx": {
+    "source": "iana"
+  },
+  "image/vnd.adobe.photoshop": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["psd"]
+  },
+  "image/vnd.airzip.accelerator.azv": {
+    "source": "iana"
+  },
+  "image/vnd.cns.inf2": {
+    "source": "iana"
+  },
+  "image/vnd.dece.graphic": {
+    "source": "iana",
+    "extensions": ["uvi","uvvi","uvg","uvvg"]
+  },
+  "image/vnd.djvu": {
+    "source": "iana",
+    "extensions": ["djvu","djv"]
+  },
+  "image/vnd.dvb.subtitle": {
+    "source": "iana",
+    "extensions": ["sub"]
+  },
+  "image/vnd.dwg": {
+    "source": "iana",
+    "extensions": ["dwg"]
+  },
+  "image/vnd.dxf": {
+    "source": "iana",
+    "extensions": ["dxf"]
+  },
+  "image/vnd.fastbidsheet": {
+    "source": "iana",
+    "extensions": ["fbs"]
+  },
+  "image/vnd.fpx": {
+    "source": "iana",
+    "extensions": ["fpx"]
+  },
+  "image/vnd.fst": {
+    "source": "iana",
+    "extensions": ["fst"]
+  },
+  "image/vnd.fujixerox.edmics-mmr": {
+    "source": "iana",
+    "extensions": ["mmr"]
+  },
+  "image/vnd.fujixerox.edmics-rlc": {
+    "source": "iana",
+    "extensions": ["rlc"]
+  },
+  "image/vnd.globalgraphics.pgb": {
+    "source": "iana"
+  },
+  "image/vnd.microsoft.icon": {
+    "source": "iana"
+  },
+  "image/vnd.mix": {
+    "source": "iana"
+  },
+  "image/vnd.mozilla.apng": {
+    "source": "iana"
+  },
+  "image/vnd.ms-modi": {
+    "source": "iana",
+    "extensions": ["mdi"]
+  },
+  "image/vnd.ms-photo": {
+    "source": "apache",
+    "extensions": ["wdp"]
+  },
+  "image/vnd.net-fpx": {
+    "source": "iana",
+    "extensions": ["npx"]
+  },
+  "image/vnd.radiance": {
+    "source": "iana"
+  },
+  "image/vnd.sealed.png": {
+    "source": "iana"
+  },
+  "image/vnd.sealedmedia.softseal.gif": {
+    "source": "iana"
+  },
+  "image/vnd.sealedmedia.softseal.jpg": {
+    "source": "iana"
+  },
+  "image/vnd.svf": {
+    "source": "iana"
+  },
+  "image/vnd.tencent.tap": {
+    "source": "iana"
+  },
+  "image/vnd.valve.source.texture": {
+    "source": "iana"
+  },
+  "image/vnd.wap.wbmp": {
+    "source": "iana",
+    "extensions": ["wbmp"]
+  },
+  "image/vnd.xiff": {
+    "source": "iana",
+    "extensions": ["xif"]
+  },
+  "image/vnd.zbrush.pcx": {
+    "source": "iana"
+  },
+  "image/webp": {
+    "source": "apache",
+    "extensions": ["webp"]
+  },
+  "image/x-3ds": {
+    "source": "apache",
+    "extensions": ["3ds"]
+  },
+  "image/x-cmu-raster": {
+    "source": "apache",
+    "extensions": ["ras"]
+  },
+  "image/x-cmx": {
+    "source": "apache",
+    "extensions": ["cmx"]
+  },
+  "image/x-freehand": {
+    "source": "apache",
+    "extensions": ["fh","fhc","fh4","fh5","fh7"]
+  },
+  "image/x-icon": {
+    "source": "apache",
+    "compressible": true,
+    "extensions": ["ico"]
+  },
+  "image/x-jng": {
+    "source": "nginx",
+    "extensions": ["jng"]
+  },
+  "image/x-mrsid-image": {
+    "source": "apache",
+    "extensions": ["sid"]
+  },
+  "image/x-ms-bmp": {
+    "source": "nginx",
+    "compressible": true,
+    "extensions": ["bmp"]
+  },
+  "image/x-pcx": {
+    "source": "apache",
+    "extensions": ["pcx"]
+  },
+  "image/x-pict": {
+    "source": "apache",
+    "extensions": ["pic","pct"]
+  },
+  "image/x-portable-anymap": {
+    "source": "apache",
+    "extensions": ["pnm"]
+  },
+  "image/x-portable-bitmap": {
+    "source": "apache",
+    "extensions": ["pbm"]
+  },
+  "image/x-portable-graymap": {
+    "source": "apache",
+    "extensions": ["pgm"]
+  },
+  "image/x-portable-pixmap": {
+    "source": "apache",
+    "extensions": ["ppm"]
+  },
+  "image/x-rgb": {
+    "source": "apache",
+    "extensions": ["rgb"]
+  },
+  "image/x-tga": {
+    "source": "apache",
+    "extensions": ["tga"]
+  },
+  "image/x-xbitmap": {
+    "source": "apache",
+    "extensions": ["xbm"]
+  },
+  "image/x-xcf": {
+    "compressible": false
+  },
+  "image/x-xpixmap": {
+    "source": "apache",
+    "extensions": ["xpm"]
+  },
+  "image/x-xwindowdump": {
+    "source": "apache",
+    "extensions": ["xwd"]
+  },
+  "message/cpim": {
+    "source": "iana"
+  },
+  "message/delivery-status": {
+    "source": "iana"
+  },
+  "message/disposition-notification": {
+    "source": "iana"
+  },
+  "message/external-body": {
+    "source": "iana"
+  },
+  "message/feedback-report": {
+    "source": "iana"
+  },
+  "message/global": {
+    "source": "iana"
+  },
+  "message/global-delivery-status": {
+    "source": "iana"
+  },
+  "message/global-disposition-notification": {
+    "source": "iana"
+  },
+  "message/global-headers": {
+    "source": "iana"
+  },
+  "message/http": {
+    "source": "iana",
+    "compressible": false
+  },
+  "message/imdn+xml": {
+    "source": "iana",
+    "compressible": true
+  },
+  "message/news": {
+    "source": "iana"
+  },
+  "message/partial": {
+    "source": "iana",
+    "compressible": false
+  },
+  "message/rfc822": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["eml","mime"]
+  },
+  "message/s-http": {
+    "source": "iana"
+  },
+  "message/sip": {
+    "source": "iana"
+  },
+  "message/sipfrag": {
+    "source": "iana"
+  },
+  "message/tracking-status": {
+    "source": "iana"
+  },
+  "message/vnd.si.simp": {
+    "source": "iana"
+  },
+  "message/vnd.wfa.wsc": {
+    "source": "iana"
+  },
+  "model/iges": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["igs","iges"]
+  },
+  "model/mesh": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["msh","mesh","silo"]
+  },
+  "model/vnd.collada+xml": {
+    "source": "iana",
+    "extensions": ["dae"]
+  },
+  "model/vnd.dwf": {
+    "source": "iana",
+    "extensions": ["dwf"]
+  },
+  "model/vnd.flatland.3dml": {
+    "source": "iana"
+  },
+  "model/vnd.gdl": {
+    "source": "iana",
+    "extensions": ["gdl"]
+  },
+  "model/vnd.gs-gdl": {
+    "source": "apache"
+  },
+  "model/vnd.gs.gdl": {
+    "source": "iana"
+  },
+  "model/vnd.gtw": {
+    "source": "iana",
+    "extensions": ["gtw"]
+  },
+  "model/vnd.moml+xml": {
+    "source": "iana"
+  },
+  "model/vnd.mts": {
+    "source": "iana",
+    "extensions": ["mts"]
+  },
+  "model/vnd.opengex": {
+    "source": "iana"
+  },
+  "model/vnd.parasolid.transmit.binary": {
+    "source": "iana"
+  },
+  "model/vnd.parasolid.transmit.text": {
+    "source": "iana"
+  },
+  "model/vnd.valve.source.compiled-map": {
+    "source": "iana"
+  },
+  "model/vnd.vtu": {
+    "source": "iana",
+    "extensions": ["vtu"]
+  },
+  "model/vrml": {
+    "source": "iana",
+    "compressible": false,
+    "extensions": ["wrl","vrml"]
+  },
+  "model/x3d+binary": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["x3db","x3dbz"]
+  },
+  "model/x3d+fastinfoset": {
+    "source": "iana"
+  },
+  "model/x3d+vrml": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["x3dv","x3dvz"]
+  },
+  "model/x3d+xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["x3d","x3dz"]
+  },
+  "model/x3d-vrml": {
+    "source": "iana"
+  },
+  "multipart/alternative": {
+    "source": "iana",
+    "compressible": false
+  },
+  "multipart/appledouble": {
+    "source": "iana"
+  },
+  "multipart/byteranges": {
+    "source": "iana"
+  },
+  "multipart/digest": {
+    "source": "iana"
+  },
+  "multipart/encrypted": {
+    "source": "iana",
+    "compressible": false
+  },
+  "multipart/form-data": {
+    "source": "iana",
+    "compressible": false
+  },
+  "multipart/header-set": {
+    "source": "iana"
+  },
+  "multipart/mixed": {
+    "source": "iana",
+    "compressible": false
+  },
+  "multipart/parallel": {
+    "source": "iana"
+  },
+  "multipart/related": {
+    "source": "iana",
+    "compressible": false
+  },
+  "multipart/report": {
+    "source": "iana"
+  },
+  "multipart/signed": {
+    "source": "iana",
+    "compressible": false
+  },
+  "multipart/voice-message": {
+    "source": "iana"
+  },
+  "multipart/x-mixed-replace": {
+    "source": "iana"
+  },
+  "text/1d-interleaved-parityfec": {
+    "source": "iana"
+  },
+  "text/cache-manifest": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["appcache","manifest"]
+  },
+  "text/calendar": {
+    "source": "iana",
+    "extensions": ["ics","ifb"]
+  },
+  "text/calender": {
+    "compressible": true
+  },
+  "text/cmd": {
+    "compressible": true
+  },
+  "text/coffeescript": {
+    "extensions": ["coffee","litcoffee"]
+  },
+  "text/css": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["css"]
+  },
+  "text/csv": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["csv"]
+  },
+  "text/csv-schema": {
+    "source": "iana"
+  },
+  "text/directory": {
+    "source": "iana"
+  },
+  "text/dns": {
+    "source": "iana"
+  },
+  "text/ecmascript": {
+    "source": "iana"
+  },
+  "text/encaprtp": {
+    "source": "iana"
+  },
+  "text/enriched": {
+    "source": "iana"
+  },
+  "text/fwdred": {
+    "source": "iana"
+  },
+  "text/grammar-ref-list": {
+    "source": "iana"
+  },
+  "text/hjson": {
+    "extensions": ["hjson"]
+  },
+  "text/html": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["html","htm","shtml"]
+  },
+  "text/jade": {
+    "extensions": ["jade"]
+  },
+  "text/javascript": {
+    "source": "iana",
+    "compressible": true
+  },
+  "text/jcr-cnd": {
+    "source": "iana"
+  },
+  "text/jsx": {
+    "compressible": true,
+    "extensions": ["jsx"]
+  },
+  "text/less": {
+    "extensions": ["less"]
+  },
+  "text/markdown": {
+    "source": "iana"
+  },
+  "text/mathml": {
+    "source": "nginx",
+    "extensions": ["mml"]
+  },
+  "text/mizar": {
+    "source": "iana"
+  },
+  "text/n3": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["n3"]
+  },
+  "text/parameters": {
+    "source": "iana"
+  },
+  "text/parityfec": {
+    "source": "iana"
+  },
+  "text/plain": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["txt","text","conf","def","list","log","in","ini"]
+  },
+  "text/provenance-notation": {
+    "source": "iana"
+  },
+  "text/prs.fallenstein.rst": {
+    "source": "iana"
+  },
+  "text/prs.lines.tag": {
+    "source": "iana",
+    "extensions": ["dsc"]
+  },
+  "text/raptorfec": {
+    "source": "iana"
+  },
+  "text/red": {
+    "source": "iana"
+  },
+  "text/rfc822-headers": {
+    "source": "iana"
+  },
+  "text/richtext": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["rtx"]
+  },
+  "text/rtf": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["rtf"]
+  },
+  "text/rtp-enc-aescm128": {
+    "source": "iana"
+  },
+  "text/rtploopback": {
+    "source": "iana"
+  },
+  "text/rtx": {
+    "source": "iana"
+  },
+  "text/sgml": {
+    "source": "iana",
+    "extensions": ["sgml","sgm"]
+  },
+  "text/stylus": {
+    "extensions": ["stylus","styl"]
+  },
+  "text/t140": {
+    "source": "iana"
+  },
+  "text/tab-separated-values": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["tsv"]
+  },
+  "text/troff": {
+    "source": "iana",
+    "extensions": ["t","tr","roff","man","me","ms"]
+  },
+  "text/turtle": {
+    "source": "iana",
+    "extensions": ["ttl"]
+  },
+  "text/ulpfec": {
+    "source": "iana"
+  },
+  "text/uri-list": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["uri","uris","urls"]
+  },
+  "text/vcard": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["vcard"]
+  },
+  "text/vnd.a": {
+    "source": "iana"
+  },
+  "text/vnd.abc": {
+    "source": "iana"
+  },
+  "text/vnd.curl": {
+    "source": "iana",
+    "extensions": ["curl"]
+  },
+  "text/vnd.curl.dcurl": {
+    "source": "apache",
+    "extensions": ["dcurl"]
+  },
+  "text/vnd.curl.mcurl": {
+    "source": "apache",
+    "extensions": ["mcurl"]
+  },
+  "text/vnd.curl.scurl": {
+    "source": "apache",
+    "extensions": ["scurl"]
+  },
+  "text/vnd.debian.copyright": {
+    "source": "iana"
+  },
+  "text/vnd.dmclientscript": {
+    "source": "iana"
+  },
+  "text/vnd.dvb.subtitle": {
+    "source": "iana",
+    "extensions": ["sub"]
+  },
+  "text/vnd.esmertec.theme-descriptor": {
+    "source": "iana"
+  },
+  "text/vnd.fly": {
+    "source": "iana",
+    "extensions": ["fly"]
+  },
+  "text/vnd.fmi.flexstor": {
+    "source": "iana",
+    "extensions": ["flx"]
+  },
+  "text/vnd.graphviz": {
+    "source": "iana",
+    "extensions": ["gv"]
+  },
+  "text/vnd.in3d.3dml": {
+    "source": "iana",
+    "extensions": ["3dml"]
+  },
+  "text/vnd.in3d.spot": {
+    "source": "iana",
+    "extensions": ["spot"]
+  },
+  "text/vnd.iptc.newsml": {
+    "source": "iana"
+  },
+  "text/vnd.iptc.nitf": {
+    "source": "iana"
+  },
+  "text/vnd.latex-z": {
+    "source": "iana"
+  },
+  "text/vnd.motorola.reflex": {
+    "source": "iana"
+  },
+  "text/vnd.ms-mediapackage": {
+    "source": "iana"
+  },
+  "text/vnd.net2phone.commcenter.command": {
+    "source": "iana"
+  },
+  "text/vnd.radisys.msml-basic-layout": {
+    "source": "iana"
+  },
+  "text/vnd.si.uricatalogue": {
+    "source": "iana"
+  },
+  "text/vnd.sun.j2me.app-descriptor": {
+    "source": "iana",
+    "extensions": ["jad"]
+  },
+  "text/vnd.trolltech.linguist": {
+    "source": "iana"
+  },
+  "text/vnd.wap.si": {
+    "source": "iana"
+  },
+  "text/vnd.wap.sl": {
+    "source": "iana"
+  },
+  "text/vnd.wap.wml": {
+    "source": "iana",
+    "extensions": ["wml"]
+  },
+  "text/vnd.wap.wmlscript": {
+    "source": "iana",
+    "extensions": ["wmls"]
+  },
+  "text/vtt": {
+    "charset": "UTF-8",
+    "compressible": true,
+    "extensions": ["vtt"]
+  },
+  "text/x-asm": {
+    "source": "apache",
+    "extensions": ["s","asm"]
+  },
+  "text/x-c": {
+    "source": "apache",
+    "extensions": ["c","cc","cxx","cpp","h","hh","dic"]
+  },
+  "text/x-component": {
+    "source": "nginx",
+    "extensions": ["htc"]
+  },
+  "text/x-fortran": {
+    "source": "apache",
+    "extensions": ["f","for","f77","f90"]
+  },
+  "text/x-gwt-rpc": {
+    "compressible": true
+  },
+  "text/x-handlebars-template": {
+    "extensions": ["hbs"]
+  },
+  "text/x-java-source": {
+    "source": "apache",
+    "extensions": ["java"]
+  },
+  "text/x-jquery-tmpl": {
+    "compressible": true
+  },
+  "text/x-lua": {
+    "extensions": ["lua"]
+  },
+  "text/x-markdown": {
+    "compressible": true,
+    "extensions": ["markdown","md","mkd"]
+  },
+  "text/x-nfo": {
+    "source": "apache",
+    "extensions": ["nfo"]
+  },
+  "text/x-opml": {
+    "source": "apache",
+    "extensions": ["opml"]
+  },
+  "text/x-pascal": {
+    "source": "apache",
+    "extensions": ["p","pas"]
+  },
+  "text/x-processing": {
+    "compressible": true,
+    "extensions": ["pde"]
+  },
+  "text/x-sass": {
+    "extensions": ["sass"]
+  },
+  "text/x-scss": {
+    "extensions": ["scss"]
+  },
+  "text/x-setext": {
+    "source": "apache",
+    "extensions": ["etx"]
+  },
+  "text/x-sfv": {
+    "source": "apache",
+    "extensions": ["sfv"]
+  },
+  "text/x-suse-ymp": {
+    "compressible": true,
+    "extensions": ["ymp"]
+  },
+  "text/x-uuencode": {
+    "source": "apache",
+    "extensions": ["uu"]
+  },
+  "text/x-vcalendar": {
+    "source": "apache",
+    "extensions": ["vcs"]
+  },
+  "text/x-vcard": {
+    "source": "apache",
+    "extensions": ["vcf"]
+  },
+  "text/xml": {
+    "source": "iana",
+    "compressible": true,
+    "extensions": ["xml"]
+  },
+  "text/xml-external-parsed-entity": {
+    "source": "iana"
+  },
+  "text/yaml": {
+    "extensions": ["yaml","yml"]
+  },
+  "video/1d-interleaved-parityfec": {
+    "source": "apache"
+  },
+  "video/3gpp": {
+    "source": "apache",
+    "extensions": ["3gp","3gpp"]
+  },
+  "video/3gpp-tt": {
+    "source": "apache"
+  },
+  "video/3gpp2": {
+    "source": "apache",
+    "extensions": ["3g2"]
+  },
+  "video/bmpeg": {
+    "source": "apache"
+  },
+  "video/bt656": {
+    "source": "apache"
+  },
+  "video/celb": {
+    "source": "apache"
+  },
+  "video/dv": {
+    "source": "apache"
+  },
+  "video/h261": {
+    "source": "apache",
+    "extensions": ["h261"]
+  },
+  "video/h263": {
+    "source": "apache",
+    "extensions": ["h263"]
+  },
+  "video/h263-1998": {
+    "source": "apache"
+  },
+  "video/h263-2000": {
+    "source": "apache"
+  },
+  "video/h264": {
+    "source": "apache",
+    "extensions": ["h264"]
+  },
+  "video/h264-rcdo": {
+    "source": "apache"
+  },
+  "video/h264-svc": {
+    "source": "apache"
+  },
+  "video/jpeg": {
+    "source": "apache",
+    "extensions": ["jpgv"]
+  },
+  "video/jpeg2000": {
+    "source": "apache"
+  },
+  "video/jpm": {
+    "source": "apache",
+    "extensions": ["jpm","jpgm"]
+  },
+  "video/mj2": {
+    "source": "apache",
+    "extensions": ["mj2","mjp2"]
+  },
+  "video/mp1s": {
+    "source": "apache"
+  },
+  "video/mp2p": {
+    "source": "apache"
+  },
+  "video/mp2t": {
+    "source": "apache",
+    "extensions": ["ts"]
+  },
+  "video/mp4": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["mp4","mp4v","mpg4"]
+  },
+  "video/mp4v-es": {
+    "source": "apache"
+  },
+  "video/mpeg": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["mpeg","mpg","mpe","m1v","m2v"]
+  },
+  "video/mpeg4-generic": {
+    "source": "apache"
+  },
+  "video/mpv": {
+    "source": "apache"
+  },
+  "video/nv": {
+    "source": "apache"
+  },
+  "video/ogg": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["ogv"]
+  },
+  "video/parityfec": {
+    "source": "apache"
+  },
+  "video/pointer": {
+    "source": "apache"
+  },
+  "video/quicktime": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["qt","mov"]
+  },
+  "video/raw": {
+    "source": "apache"
+  },
+  "video/rtp-enc-aescm128": {
+    "source": "apache"
+  },
+  "video/rtx": {
+    "source": "apache"
+  },
+  "video/smpte292m": {
+    "source": "apache"
+  },
+  "video/ulpfec": {
+    "source": "apache"
+  },
+  "video/vc1": {
+    "source": "apache"
+  },
+  "video/vnd.cctv": {
+    "source": "apache"
+  },
+  "video/vnd.dece.hd": {
+    "source": "apache",
+    "extensions": ["uvh","uvvh"]
+  },
+  "video/vnd.dece.mobile": {
+    "source": "apache",
+    "extensions": ["uvm","uvvm"]
+  },
+  "video/vnd.dece.mp4": {
+    "source": "apache"
+  },
+  "video/vnd.dece.pd": {
+    "source": "apache",
+    "extensions": ["uvp","uvvp"]
+  },
+  "video/vnd.dece.sd": {
+    "source": "apache",
+    "extensions": ["uvs","uvvs"]
+  },
+  "video/vnd.dece.video": {
+    "source": "apache",
+    "extensions": ["uvv","uvvv"]
+  },
+  "video/vnd.directv.mpeg": {
+    "source": "apache"
+  },
+  "video/vnd.directv.mpeg-tts": {
+    "source": "apache"
+  },
+  "video/vnd.dlna.mpeg-tts": {
+    "source": "apache"
+  },
+  "video/vnd.dvb.file": {
+    "source": "apache",
+    "extensions": ["dvb"]
+  },
+  "video/vnd.fvt": {
+    "source": "apache",
+    "extensions": ["fvt"]
+  },
+  "video/vnd.hns.video": {
+    "source": "apache"
+  },
+  "video/vnd.iptvforum.1dparityfec-1010": {
+    "source": "apache"
+  },
+  "video/vnd.iptvforum.1dparityfec-2005": {
+    "source": "apache"
+  },
+  "video/vnd.iptvforum.2dparityfec-1010": {
+    "source": "apache"
+  },
+  "video/vnd.iptvforum.2dparityfec-2005": {
+    "source": "apache"
+  },
+  "video/vnd.iptvforum.ttsavc": {
+    "source": "apache"
+  },
+  "video/vnd.iptvforum.ttsmpeg2": {
+    "source": "apache"
+  },
+  "video/vnd.motorola.video": {
+    "source": "apache"
+  },
+  "video/vnd.motorola.videop": {
+    "source": "apache"
+  },
+  "video/vnd.mpegurl": {
+    "source": "apache",
+    "extensions": ["mxu","m4u"]
+  },
+  "video/vnd.ms-playready.media.pyv": {
+    "source": "apache",
+    "extensions": ["pyv"]
+  },
+  "video/vnd.nokia.interleaved-multimedia": {
+    "source": "apache"
+  },
+  "video/vnd.nokia.videovoip": {
+    "source": "apache"
+  },
+  "video/vnd.objectvideo": {
+    "source": "apache"
+  },
+  "video/vnd.sealed.mpeg1": {
+    "source": "apache"
+  },
+  "video/vnd.sealed.mpeg4": {
+    "source": "apache"
+  },
+  "video/vnd.sealed.swf": {
+    "source": "apache"
+  },
+  "video/vnd.sealedmedia.softseal.mov": {
+    "source": "apache"
+  },
+  "video/vnd.uvvu.mp4": {
+    "source": "apache",
+    "extensions": ["uvu","uvvu"]
+  },
+  "video/vnd.vivo": {
+    "source": "apache",
+    "extensions": ["viv"]
+  },
+  "video/webm": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["webm"]
+  },
+  "video/x-f4v": {
+    "source": "apache",
+    "extensions": ["f4v"]
+  },
+  "video/x-fli": {
+    "source": "apache",
+    "extensions": ["fli"]
+  },
+  "video/x-flv": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["flv"]
+  },
+  "video/x-m4v": {
+    "source": "apache",
+    "extensions": ["m4v"]
+  },
+  "video/x-matroska": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["mkv","mk3d","mks"]
+  },
+  "video/x-mng": {
+    "source": "apache",
+    "extensions": ["mng"]
+  },
+  "video/x-ms-asf": {
+    "source": "apache",
+    "extensions": ["asf","asx"]
+  },
+  "video/x-ms-vob": {
+    "source": "apache",
+    "extensions": ["vob"]
+  },
+  "video/x-ms-wm": {
+    "source": "apache",
+    "extensions": ["wm"]
+  },
+  "video/x-ms-wmv": {
+    "source": "apache",
+    "compressible": false,
+    "extensions": ["wmv"]
+  },
+  "video/x-ms-wmx": {
+    "source": "apache",
+    "extensions": ["wmx"]
+  },
+  "video/x-ms-wvx": {
+    "source": "apache",
+    "extensions": ["wvx"]
+  },
+  "video/x-msvideo": {
+    "source": "apache",
+    "extensions": ["avi"]
+  },
+  "video/x-sgi-movie": {
+    "source": "apache",
+    "extensions": ["movie"]
+  },
+  "video/x-smv": {
+    "source": "apache",
+    "extensions": ["smv"]
+  },
+  "x-conference/x-cooltalk": {
+    "source": "apache",
+    "extensions": ["ice"]
+  },
+  "x-shader/x-fragment": {
+    "compressible": true
+  },
+  "x-shader/x-vertex": {
+    "compressible": true
+  }
+}
+},{}],189:[function(require,module,exports){
 module["exports"] = [
   "ants",
   "bats",
@@ -19277,30 +26739,30 @@ module["exports"] = [
   "druids"
 ];
 
-},{}],201:[function(require,module,exports){
+},{}],190:[function(require,module,exports){
 var team = {};
 module['exports'] = team;
 team.creature = require("./creature");
 team.name = require("./name");
 
-},{"./creature":200,"./name":202}],202:[function(require,module,exports){
+},{"./creature":189,"./name":191}],191:[function(require,module,exports){
 module["exports"] = [
   "#{Address.state} #{creature}"
 ];
 
-},{}],203:[function(require,module,exports){
+},{}],192:[function(require,module,exports){
 module["exports"] = [
   "####",
   "###",
   "##"
 ];
 
-},{}],204:[function(require,module,exports){
+},{}],193:[function(require,module,exports){
 module["exports"] = [
   "Australia"
 ];
 
-},{}],205:[function(require,module,exports){
+},{}],194:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.state_abbr = require("./state_abbr");
@@ -19310,7 +26772,7 @@ address.building_number = require("./building_number");
 address.street_suffix = require("./street_suffix");
 address.default_country = require("./default_country");
 
-},{"./building_number":203,"./default_country":204,"./postcode":206,"./state":207,"./state_abbr":208,"./street_suffix":209}],206:[function(require,module,exports){
+},{"./building_number":192,"./default_country":193,"./postcode":195,"./state":196,"./state_abbr":197,"./street_suffix":198}],195:[function(require,module,exports){
 module["exports"] = [
   "0###",
   "2###",
@@ -19321,7 +26783,7 @@ module["exports"] = [
   "7###"
 ];
 
-},{}],207:[function(require,module,exports){
+},{}],196:[function(require,module,exports){
 module["exports"] = [
   "New South Wales",
   "Queensland",
@@ -19333,7 +26795,7 @@ module["exports"] = [
   "Victoria"
 ];
 
-},{}],208:[function(require,module,exports){
+},{}],197:[function(require,module,exports){
 module["exports"] = [
   "NSW",
   "QLD",
@@ -19345,7 +26807,7 @@ module["exports"] = [
   "VIC"
 ];
 
-},{}],209:[function(require,module,exports){
+},{}],198:[function(require,module,exports){
 module["exports"] = [
   "Avenue",
   "Boulevard",
@@ -19386,12 +26848,12 @@ module["exports"] = [
   "Way"
 ];
 
-},{}],210:[function(require,module,exports){
+},{}],199:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
 
-},{"./suffix":211}],211:[function(require,module,exports){
+},{"./suffix":200}],200:[function(require,module,exports){
 module["exports"] = [
   "Pty Ltd",
   "and Sons",
@@ -19401,7 +26863,7 @@ module["exports"] = [
   "Partners"
 ];
 
-},{}],212:[function(require,module,exports){
+},{}],201:[function(require,module,exports){
 var en_AU = {};
 module['exports'] = en_AU;
 en_AU.title = "Australia (English)";
@@ -19411,7 +26873,7 @@ en_AU.internet = require("./internet");
 en_AU.address = require("./address");
 en_AU.phone_number = require("./phone_number");
 
-},{"./address":205,"./company":210,"./internet":214,"./name":216,"./phone_number":219}],213:[function(require,module,exports){
+},{"./address":194,"./company":199,"./internet":203,"./name":205,"./phone_number":208}],202:[function(require,module,exports){
 module["exports"] = [
   "com.au",
   "com",
@@ -19421,9 +26883,9 @@ module["exports"] = [
   "org"
 ];
 
-},{}],214:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":213,"dup":115}],215:[function(require,module,exports){
+},{}],203:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":202,"dup":96}],204:[function(require,module,exports){
 module["exports"] = [
   "William",
   "Jack",
@@ -19627,13 +27089,13 @@ module["exports"] = [
   "Kiara"
 ];
 
-},{}],216:[function(require,module,exports){
+},{}],205:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
 name.last_name = require("./last_name");
 
-},{"./first_name":215,"./last_name":217}],217:[function(require,module,exports){
+},{"./first_name":204,"./last_name":206}],206:[function(require,module,exports){
 module["exports"] = [
   "Smith",
   "Jones",
@@ -19923,7 +27385,7 @@ module["exports"] = [
   "Wolf"
 ];
 
-},{}],218:[function(require,module,exports){
+},{}],207:[function(require,module,exports){
 module["exports"] = [
   "0# #### ####",
   "+61 # #### ####",
@@ -19931,17 +27393,17 @@ module["exports"] = [
   "+61 4## ### ###"
 ];
 
-},{}],219:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":218,"dup":74}],220:[function(require,module,exports){
+},{}],208:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":207,"dup":55}],209:[function(require,module,exports){
 var en_BORK = {};
 module['exports'] = en_BORK;
 en_BORK.title = "Bork (English)";
 en_BORK.lorem = require("./lorem");
 
-},{"./lorem":221}],221:[function(require,module,exports){
-arguments[4][65][0].apply(exports,arguments)
-},{"./words":222,"dup":65}],222:[function(require,module,exports){
+},{"./lorem":210}],210:[function(require,module,exports){
+arguments[4][46][0].apply(exports,arguments)
+},{"./words":211,"dup":46}],211:[function(require,module,exports){
 module["exports"] = [
   "Boot",
   "I",
@@ -20048,12 +27510,12 @@ module["exports"] = [
   "zeere-a"
 ];
 
-},{}],223:[function(require,module,exports){
+},{}],212:[function(require,module,exports){
 module["exports"] = [
   "Canada"
 ];
 
-},{}],224:[function(require,module,exports){
+},{}],213:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.state = require("./state");
@@ -20061,12 +27523,12 @@ address.state_abbr = require("./state_abbr");
 address.default_country = require("./default_country");
 address.postcode = require('./postcode.js');
 
-},{"./default_country":223,"./postcode.js":225,"./state":226,"./state_abbr":227}],225:[function(require,module,exports){
+},{"./default_country":212,"./postcode.js":214,"./state":215,"./state_abbr":216}],214:[function(require,module,exports){
 module["exports"] = [
   "?#? #?#"
 ];
 
-},{}],226:[function(require,module,exports){
+},{}],215:[function(require,module,exports){
 module["exports"] = [
   "Alberta",
   "British Columbia",
@@ -20083,7 +27545,7 @@ module["exports"] = [
   "Yukon"
 ];
 
-},{}],227:[function(require,module,exports){
+},{}],216:[function(require,module,exports){
 module["exports"] = [
   "AB",
   "BC",
@@ -20100,7 +27562,7 @@ module["exports"] = [
   "YT"
 ];
 
-},{}],228:[function(require,module,exports){
+},{}],217:[function(require,module,exports){
 var en_CA = {};
 module['exports'] = en_CA;
 en_CA.title = "Canada (English)";
@@ -20108,7 +27570,7 @@ en_CA.address = require("./address");
 en_CA.internet = require("./internet");
 en_CA.phone_number = require("./phone_number");
 
-},{"./address":224,"./internet":231,"./phone_number":233}],229:[function(require,module,exports){
+},{"./address":213,"./internet":220,"./phone_number":222}],218:[function(require,module,exports){
 module["exports"] = [
   "ca",
   "com",
@@ -20119,16 +27581,16 @@ module["exports"] = [
   "org"
 ];
 
-},{}],230:[function(require,module,exports){
+},{}],219:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.ca",
   "hotmail.com"
 ];
 
-},{}],231:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":229,"./free_email":230,"dup":64}],232:[function(require,module,exports){
+},{}],220:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":218,"./free_email":219,"dup":45}],221:[function(require,module,exports){
 module["exports"] = [
   "###-###-####",
   "(###)###-####",
@@ -20148,9 +27610,9 @@ module["exports"] = [
   "###.###.#### x#####"
 ];
 
-},{}],233:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":232,"dup":74}],234:[function(require,module,exports){
+},{}],222:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":221,"dup":55}],223:[function(require,module,exports){
 module["exports"] = [
   "Avon",
   "Bedfordshire",
@@ -20224,7 +27686,7 @@ module["exports"] = [
   "Worcestershire"
 ];
 
-},{}],235:[function(require,module,exports){
+},{}],224:[function(require,module,exports){
 module["exports"] = [
   "England",
   "Scotland",
@@ -20232,16 +27694,23 @@ module["exports"] = [
   "Northern Ireland"
 ];
 
-},{}],236:[function(require,module,exports){
+},{}],225:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.county = require("./county");
 address.uk_country = require("./uk_country");
 address.default_country = require("./default_country");
+address.postcode = require("./postcode");
 
-},{"./county":234,"./default_country":235,"./uk_country":237}],237:[function(require,module,exports){
-arguments[4][235][0].apply(exports,arguments)
-},{"dup":235}],238:[function(require,module,exports){
+},{"./county":223,"./default_country":224,"./postcode":226,"./uk_country":227}],226:[function(require,module,exports){
+module["exports"] = [
+  "??# #??",
+  "??## #??",
+];
+
+},{}],227:[function(require,module,exports){
+arguments[4][224][0].apply(exports,arguments)
+},{"dup":224}],228:[function(require,module,exports){
 module["exports"] = [
   "074## ######",
   "075## ######",
@@ -20251,9 +27720,9 @@ module["exports"] = [
   "079## ######"
 ];
 
-},{}],239:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":238,"dup":56}],240:[function(require,module,exports){
+},{}],229:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":228,"dup":37}],230:[function(require,module,exports){
 var en_GB = {};
 module['exports'] = en_GB;
 en_GB.title = "Great Britain (English)";
@@ -20262,7 +27731,7 @@ en_GB.internet = require("./internet");
 en_GB.phone_number = require("./phone_number");
 en_GB.cell_phone = require("./cell_phone");
 
-},{"./address":236,"./cell_phone":239,"./internet":242,"./phone_number":244}],241:[function(require,module,exports){
+},{"./address":225,"./cell_phone":229,"./internet":232,"./phone_number":234}],231:[function(require,module,exports){
 module["exports"] = [
   "co.uk",
   "com",
@@ -20271,9 +27740,9 @@ module["exports"] = [
   "name"
 ];
 
-},{}],242:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":241,"dup":115}],243:[function(require,module,exports){
+},{}],232:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":231,"dup":96}],233:[function(require,module,exports){
 module["exports"] = [
   "01#### #####",
   "01### ######",
@@ -20292,9 +27761,9 @@ module["exports"] = [
   "0800 ######"
 ];
 
-},{}],244:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":243,"dup":74}],245:[function(require,module,exports){
+},{}],234:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":233,"dup":55}],235:[function(require,module,exports){
 module["exports"] = [
   "Carlow",
   "Cavan",
@@ -20324,18 +27793,18 @@ module["exports"] = [
   "Wicklow"
 ];
 
-},{}],246:[function(require,module,exports){
+},{}],236:[function(require,module,exports){
 module["exports"] = [
   "Ireland"
 ];
 
-},{}],247:[function(require,module,exports){
+},{}],237:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.county = require("./county");
 address.default_country = require("./default_country");
 
-},{"./county":245,"./default_country":246}],248:[function(require,module,exports){
+},{"./county":235,"./default_country":236}],238:[function(require,module,exports){
 module["exports"] = [
   "082 ### ####",
   "083 ### ####",
@@ -20345,9 +27814,9 @@ module["exports"] = [
   "089 ### ####"
 ];
 
-},{}],249:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":248,"dup":56}],250:[function(require,module,exports){
+},{}],239:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":238,"dup":37}],240:[function(require,module,exports){
 var en_IE = {};
 module['exports'] = en_IE;
 en_IE.title = "Ireland (English)";
@@ -20356,7 +27825,7 @@ en_IE.internet = require("./internet");
 en_IE.phone_number = require("./phone_number");
 en_IE.cell_phone = require("./cell_phone");
 
-},{"./address":247,"./cell_phone":249,"./internet":252,"./phone_number":254}],251:[function(require,module,exports){
+},{"./address":237,"./cell_phone":239,"./internet":242,"./phone_number":244}],241:[function(require,module,exports){
 module["exports"] = [
   "ie",
   "com",
@@ -20365,9 +27834,9 @@ module["exports"] = [
   "eu"
 ];
 
-},{}],252:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":251,"dup":115}],253:[function(require,module,exports){
+},{}],242:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":241,"dup":96}],243:[function(require,module,exports){
 module["exports"] = [
   "01 #######",
   "021 #######",
@@ -20420,9 +27889,9 @@ module["exports"] = [
   "099 #######"
 ];
 
-},{}],254:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":253,"dup":74}],255:[function(require,module,exports){
+},{}],244:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":243,"dup":55}],245:[function(require,module,exports){
 module["exports"] = [
   "India",
   "Indian Republic",
@@ -20430,7 +27899,7 @@ module["exports"] = [
   "Hindustan"
 ];
 
-},{}],256:[function(require,module,exports){
+},{}],246:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.postcode = require("./postcode");
@@ -20438,9 +27907,9 @@ address.state = require("./state");
 address.state_abbr = require("./state_abbr");
 address.default_country = require("./default_country");
 
-},{"./default_country":255,"./postcode":257,"./state":258,"./state_abbr":259}],257:[function(require,module,exports){
-arguments[4][225][0].apply(exports,arguments)
-},{"dup":225}],258:[function(require,module,exports){
+},{"./default_country":245,"./postcode":247,"./state":248,"./state_abbr":249}],247:[function(require,module,exports){
+arguments[4][214][0].apply(exports,arguments)
+},{"dup":214}],248:[function(require,module,exports){
 module["exports"] = [
   "Andra Pradesh",
   "Arunachal Pradesh",
@@ -20479,7 +27948,7 @@ module["exports"] = [
   "Pondicherry"
 ];
 
-},{}],259:[function(require,module,exports){
+},{}],249:[function(require,module,exports){
 module["exports"] = [
   "AP",
   "AR",
@@ -20518,9 +27987,9 @@ module["exports"] = [
   "PY"
 ];
 
-},{}],260:[function(require,module,exports){
-arguments[4][210][0].apply(exports,arguments)
-},{"./suffix":261,"dup":210}],261:[function(require,module,exports){
+},{}],250:[function(require,module,exports){
+arguments[4][199][0].apply(exports,arguments)
+},{"./suffix":251,"dup":199}],251:[function(require,module,exports){
 module["exports"] = [
   "Pvt Ltd",
   "Limited",
@@ -20531,7 +28000,7 @@ module["exports"] = [
   "Brothers"
 ];
 
-},{}],262:[function(require,module,exports){
+},{}],252:[function(require,module,exports){
 var en_IND = {};
 module['exports'] = en_IND;
 en_IND.title = "India (English)";
@@ -20541,7 +28010,7 @@ en_IND.internet = require("./internet");
 en_IND.company = require("./company");
 en_IND.phone_number = require("./phone_number");
 
-},{"./address":256,"./company":260,"./internet":265,"./name":267,"./phone_number":270}],263:[function(require,module,exports){
+},{"./address":246,"./company":250,"./internet":255,"./name":257,"./phone_number":260}],253:[function(require,module,exports){
 module["exports"] = [
   "in",
   "com",
@@ -20553,16 +28022,16 @@ module["exports"] = [
   "co.in"
 ];
 
-},{}],264:[function(require,module,exports){
+},{}],254:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.co.in",
   "hotmail.com"
 ];
 
-},{}],265:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":263,"./free_email":264,"dup":64}],266:[function(require,module,exports){
+},{}],255:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":253,"./free_email":254,"dup":45}],256:[function(require,module,exports){
 module["exports"] = [
   "Aadrika",
   "Aanandinii",
@@ -21328,9 +28797,9 @@ module["exports"] = [
   "Yogesh"
 ];
 
-},{}],267:[function(require,module,exports){
-arguments[4][216][0].apply(exports,arguments)
-},{"./first_name":266,"./last_name":268,"dup":216}],268:[function(require,module,exports){
+},{}],257:[function(require,module,exports){
+arguments[4][205][0].apply(exports,arguments)
+},{"./first_name":256,"./last_name":258,"dup":205}],258:[function(require,module,exports){
 module["exports"] = [
   "Abbott",
   "Achari",
@@ -21423,29 +28892,29 @@ module["exports"] = [
   "Verma"
 ];
 
-},{}],269:[function(require,module,exports){
+},{}],259:[function(require,module,exports){
 module["exports"] = [
   "+91###-###-####",
   "+91##########",
   "+91-###-#######"
 ];
 
-},{}],270:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":269,"dup":74}],271:[function(require,module,exports){
+},{}],260:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":259,"dup":55}],261:[function(require,module,exports){
 module["exports"] = [
   "United States",
   "United States of America",
   "USA"
 ];
 
-},{}],272:[function(require,module,exports){
+},{}],262:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.default_country = require("./default_country");
 address.postcode_by_state = require("./postcode_by_state");
 
-},{"./default_country":271,"./postcode_by_state":273}],273:[function(require,module,exports){
+},{"./default_country":261,"./postcode_by_state":263}],263:[function(require,module,exports){
 module["exports"] = {
   "AL": "350##",
   "AK": "995##",
@@ -21501,7 +28970,7 @@ module["exports"] = {
   "WY": "831##"
 };
 
-},{}],274:[function(require,module,exports){
+},{}],264:[function(require,module,exports){
 var en_US = {};
 module['exports'] = en_US;
 en_US.title = "United States (English)";
@@ -21509,7 +28978,7 @@ en_US.internet = require("./internet");
 en_US.address = require("./address");
 en_US.phone_number = require("./phone_number");
 
-},{"./address":272,"./internet":276,"./phone_number":279}],275:[function(require,module,exports){
+},{"./address":262,"./internet":266,"./phone_number":269}],265:[function(require,module,exports){
 module["exports"] = [
   "com",
   "us",
@@ -21520,9 +28989,9 @@ module["exports"] = [
   "org"
 ];
 
-},{}],276:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":275,"dup":115}],277:[function(require,module,exports){
+},{}],266:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":265,"dup":96}],267:[function(require,module,exports){
 module["exports"] = [
   "201",
   "202",
@@ -21809,22 +29278,22 @@ module["exports"] = [
   "989"
 ];
 
-},{}],278:[function(require,module,exports){
-arguments[4][277][0].apply(exports,arguments)
-},{"dup":277}],279:[function(require,module,exports){
+},{}],268:[function(require,module,exports){
+arguments[4][267][0].apply(exports,arguments)
+},{"dup":267}],269:[function(require,module,exports){
 var phone_number = {};
 module['exports'] = phone_number;
 phone_number.area_code = require("./area_code");
 phone_number.exchange_code = require("./exchange_code");
 
-},{"./area_code":277,"./exchange_code":278}],280:[function(require,module,exports){
-arguments[4][203][0].apply(exports,arguments)
-},{"dup":203}],281:[function(require,module,exports){
+},{"./area_code":267,"./exchange_code":268}],270:[function(require,module,exports){
+arguments[4][192][0].apply(exports,arguments)
+},{"dup":192}],271:[function(require,module,exports){
 module["exports"] = [
   "#{city_prefix}"
 ];
 
-},{}],282:[function(require,module,exports){
+},{}],272:[function(require,module,exports){
 module["exports"] = [
   "Bondi",
   "Burleigh Heads",
@@ -21840,9 +29309,9 @@ module["exports"] = [
   "Yarra Valley"
 ];
 
-},{}],283:[function(require,module,exports){
-arguments[4][204][0].apply(exports,arguments)
-},{"dup":204}],284:[function(require,module,exports){
+},{}],273:[function(require,module,exports){
+arguments[4][193][0].apply(exports,arguments)
+},{"dup":193}],274:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.street_root = require("./street_root");
@@ -21857,9 +29326,9 @@ address.building_number = require("./building_number");
 address.street_suffix = require("./street_suffix");
 address.default_country = require("./default_country");
 
-},{"./building_number":280,"./city":281,"./city_prefix":282,"./default_country":283,"./postcode":285,"./region":286,"./state":287,"./state_abbr":288,"./street_name":289,"./street_root":290,"./street_suffix":291}],285:[function(require,module,exports){
-arguments[4][206][0].apply(exports,arguments)
-},{"dup":206}],286:[function(require,module,exports){
+},{"./building_number":270,"./city":271,"./city_prefix":272,"./default_country":273,"./postcode":275,"./region":276,"./state":277,"./state_abbr":278,"./street_name":279,"./street_root":280,"./street_suffix":281}],275:[function(require,module,exports){
+arguments[4][195][0].apply(exports,arguments)
+},{"dup":195}],276:[function(require,module,exports){
 module["exports"] = [
   "South East Queensland",
   "Wide Bay Burnett",
@@ -21870,13 +29339,13 @@ module["exports"] = [
   "Barossa"
 ];
 
-},{}],287:[function(require,module,exports){
-arguments[4][207][0].apply(exports,arguments)
-},{"dup":207}],288:[function(require,module,exports){
-arguments[4][208][0].apply(exports,arguments)
-},{"dup":208}],289:[function(require,module,exports){
-arguments[4][53][0].apply(exports,arguments)
-},{"dup":53}],290:[function(require,module,exports){
+},{}],277:[function(require,module,exports){
+arguments[4][196][0].apply(exports,arguments)
+},{"dup":196}],278:[function(require,module,exports){
+arguments[4][197][0].apply(exports,arguments)
+},{"dup":197}],279:[function(require,module,exports){
+arguments[4][34][0].apply(exports,arguments)
+},{"dup":34}],280:[function(require,module,exports){
 module["exports"] = [
   "Ramsay Street",
   "Bonnie Doon",
@@ -21884,13 +29353,13 @@ module["exports"] = [
   "Queen Street"
 ];
 
-},{}],291:[function(require,module,exports){
-arguments[4][209][0].apply(exports,arguments)
-},{"dup":209}],292:[function(require,module,exports){
-arguments[4][210][0].apply(exports,arguments)
-},{"./suffix":293,"dup":210}],293:[function(require,module,exports){
-arguments[4][211][0].apply(exports,arguments)
-},{"dup":211}],294:[function(require,module,exports){
+},{}],281:[function(require,module,exports){
+arguments[4][198][0].apply(exports,arguments)
+},{"dup":198}],282:[function(require,module,exports){
+arguments[4][199][0].apply(exports,arguments)
+},{"./suffix":283,"dup":199}],283:[function(require,module,exports){
+arguments[4][200][0].apply(exports,arguments)
+},{"dup":200}],284:[function(require,module,exports){
 var en_au_ocker = {};
 module['exports'] = en_au_ocker;
 en_au_ocker.title = "Australia Ocker (English)";
@@ -21900,11 +29369,11 @@ en_au_ocker.internet = require("./internet");
 en_au_ocker.address = require("./address");
 en_au_ocker.phone_number = require("./phone_number");
 
-},{"./address":284,"./company":292,"./internet":296,"./name":298,"./phone_number":302}],295:[function(require,module,exports){
-arguments[4][213][0].apply(exports,arguments)
-},{"dup":213}],296:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":295,"dup":115}],297:[function(require,module,exports){
+},{"./address":274,"./company":282,"./internet":286,"./name":288,"./phone_number":292}],285:[function(require,module,exports){
+arguments[4][202][0].apply(exports,arguments)
+},{"dup":202}],286:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":285,"dup":96}],287:[function(require,module,exports){
 module["exports"] = [
   "Charlotte",
   "Ava",
@@ -22012,14 +29481,14 @@ module["exports"] = [
   "Sean"
 ];
 
-},{}],298:[function(require,module,exports){
+},{}],288:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
 name.last_name = require("./last_name");
 name.ocker_first_name = require("./ocker_first_name");
 
-},{"./first_name":297,"./last_name":299,"./ocker_first_name":300}],299:[function(require,module,exports){
+},{"./first_name":287,"./last_name":289,"./ocker_first_name":290}],289:[function(require,module,exports){
 module["exports"] = [
   "Smith",
   "Jones",
@@ -22047,7 +29516,7 @@ module["exports"] = [
   "LeQuesne"
 ];
 
-},{}],300:[function(require,module,exports){
+},{}],290:[function(require,module,exports){
 module["exports"] = [
   "Bazza",
   "Bluey",
@@ -22057,11 +29526,11 @@ module["exports"] = [
   "Shazza"
 ];
 
-},{}],301:[function(require,module,exports){
-arguments[4][218][0].apply(exports,arguments)
-},{"dup":218}],302:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":301,"dup":74}],303:[function(require,module,exports){
+},{}],291:[function(require,module,exports){
+arguments[4][207][0].apply(exports,arguments)
+},{"dup":207}],292:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":291,"dup":55}],293:[function(require,module,exports){
 module["exports"] = [
   " s/n.",
   ", #",
@@ -22070,9 +29539,9 @@ module["exports"] = [
   " ##"
 ];
 
-},{}],304:[function(require,module,exports){
-arguments[4][281][0].apply(exports,arguments)
-},{"dup":281}],305:[function(require,module,exports){
+},{}],294:[function(require,module,exports){
+arguments[4][271][0].apply(exports,arguments)
+},{"dup":271}],295:[function(require,module,exports){
 module["exports"] = [
   "Parla",
   "Telde",
@@ -22205,7 +29674,7 @@ module["exports"] = [
   "Inca"
 ];
 
-},{}],306:[function(require,module,exports){
+},{}],296:[function(require,module,exports){
 module["exports"] = [
   "Afganistán",
   "Albania",
@@ -22389,12 +29858,12 @@ module["exports"] = [
   "Zimbabwe"
 ];
 
-},{}],307:[function(require,module,exports){
+},{}],297:[function(require,module,exports){
 module["exports"] = [
   "España"
 ];
 
-},{}],308:[function(require,module,exports){
+},{}],298:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -22412,12 +29881,12 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":303,"./city":304,"./city_prefix":305,"./country":306,"./default_country":307,"./postcode":309,"./province":310,"./secondary_address":311,"./state":312,"./state_abbr":313,"./street_address":314,"./street_name":315,"./street_suffix":316,"./time_zone":317}],309:[function(require,module,exports){
+},{"./building_number":293,"./city":294,"./city_prefix":295,"./country":296,"./default_country":297,"./postcode":299,"./province":300,"./secondary_address":301,"./state":302,"./state_abbr":303,"./street_address":304,"./street_name":305,"./street_suffix":306,"./time_zone":307}],299:[function(require,module,exports){
 module["exports"] = [
   "#####"
 ];
 
-},{}],310:[function(require,module,exports){
+},{}],300:[function(require,module,exports){
 module["exports"] = [
   "Álava",
   "Albacete",
@@ -22471,13 +29940,13 @@ module["exports"] = [
   "Zaragoza"
 ];
 
-},{}],311:[function(require,module,exports){
+},{}],301:[function(require,module,exports){
 module["exports"] = [
   "Esc. ###",
   "Puerta ###"
 ];
 
-},{}],312:[function(require,module,exports){
+},{}],302:[function(require,module,exports){
 module["exports"] = [
   "Andalucía",
   "Aragón",
@@ -22498,7 +29967,7 @@ module["exports"] = [
   "Región de Murcia"
 ];
 
-},{}],313:[function(require,module,exports){
+},{}],303:[function(require,module,exports){
 module["exports"] = [
   "And",
   "Ara",
@@ -22519,19 +29988,19 @@ module["exports"] = [
   "Mur"
 ];
 
-},{}],314:[function(require,module,exports){
+},{}],304:[function(require,module,exports){
 module["exports"] = [
   "#{street_name}#{building_number}",
   "#{street_name}#{building_number} #{secondary_address}"
 ];
 
-},{}],315:[function(require,module,exports){
+},{}],305:[function(require,module,exports){
 module["exports"] = [
   "#{street_suffix} #{Name.first_name}",
   "#{street_suffix} #{Name.first_name} #{Name.last_name}"
 ];
 
-},{}],316:[function(require,module,exports){
+},{}],306:[function(require,module,exports){
 module["exports"] = [
   "Aldea",
   "Apartamento",
@@ -22605,7 +30074,7 @@ module["exports"] = [
   "Vía Pública"
 ];
 
-},{}],317:[function(require,module,exports){
+},{}],307:[function(require,module,exports){
 module["exports"] = [
   "Pacífico/Midway",
   "Pacífico/Pago_Pago",
@@ -22752,7 +30221,7 @@ module["exports"] = [
   "Pacífico/Apia"
 ];
 
-},{}],318:[function(require,module,exports){
+},{}],308:[function(require,module,exports){
 module["exports"] = [
   "6##-###-###",
   "6##.###.###",
@@ -22760,9 +30229,9 @@ module["exports"] = [
   "6########"
 ];
 
-},{}],319:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":318,"dup":56}],320:[function(require,module,exports){
+},{}],309:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":308,"dup":37}],310:[function(require,module,exports){
 module["exports"] = [
   "Adaptativo",
   "Avanzado",
@@ -22851,7 +30320,7 @@ module["exports"] = [
   "Visionario"
 ];
 
-},{}],321:[function(require,module,exports){
+},{}],311:[function(require,module,exports){
 module["exports"] = [
   "24 horas",
   "24/7",
@@ -22936,7 +30405,7 @@ module["exports"] = [
   "tolerancia cero"
 ];
 
-},{}],322:[function(require,module,exports){
+},{}],312:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
@@ -22945,7 +30414,7 @@ company.descriptor = require("./descriptor");
 company.adjective = require("./adjective");
 company.name = require("./name");
 
-},{"./adjective":320,"./descriptor":321,"./name":323,"./noun":324,"./suffix":325}],323:[function(require,module,exports){
+},{"./adjective":310,"./descriptor":311,"./name":313,"./noun":314,"./suffix":315}],313:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name} y #{Name.last_name}",
@@ -22953,7 +30422,7 @@ module["exports"] = [
   "#{Name.last_name}, #{Name.last_name} y #{Name.last_name} Asociados"
 ];
 
-},{}],324:[function(require,module,exports){
+},{}],314:[function(require,module,exports){
 module["exports"] = [
   "habilidad",
   "acceso",
@@ -23050,7 +30519,7 @@ module["exports"] = [
   "fuerza de trabajo"
 ];
 
-},{}],325:[function(require,module,exports){
+},{}],315:[function(require,module,exports){
 module["exports"] = [
   "S.L.",
   "e Hijos",
@@ -23058,7 +30527,7 @@ module["exports"] = [
   "Hermanos"
 ];
 
-},{}],326:[function(require,module,exports){
+},{}],316:[function(require,module,exports){
 var es = {};
 module['exports'] = es;
 es.title = "Spanish";
@@ -23069,7 +30538,7 @@ es.name = require("./name");
 es.phone_number = require("./phone_number");
 es.cell_phone = require("./cell_phone");
 
-},{"./address":308,"./cell_phone":319,"./company":322,"./internet":329,"./name":331,"./phone_number":338}],327:[function(require,module,exports){
+},{"./address":298,"./cell_phone":309,"./company":312,"./internet":319,"./name":321,"./phone_number":328}],317:[function(require,module,exports){
 module["exports"] = [
   "com",
   "es",
@@ -23078,11 +30547,11 @@ module["exports"] = [
   "org"
 ];
 
-},{}],328:[function(require,module,exports){
-arguments[4][63][0].apply(exports,arguments)
-},{"dup":63}],329:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":327,"./free_email":328,"dup":64}],330:[function(require,module,exports){
+},{}],318:[function(require,module,exports){
+arguments[4][44][0].apply(exports,arguments)
+},{"dup":44}],319:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":317,"./free_email":318,"dup":45}],320:[function(require,module,exports){
 module["exports"] = [
   "Adán",
   "Agustín",
@@ -23298,9 +30767,9 @@ module["exports"] = [
   "Yolanda"
 ];
 
-},{}],331:[function(require,module,exports){
-arguments[4][192][0].apply(exports,arguments)
-},{"./first_name":330,"./last_name":332,"./name":333,"./prefix":334,"./suffix":335,"./title":336,"dup":192}],332:[function(require,module,exports){
+},{}],321:[function(require,module,exports){
+arguments[4][179][0].apply(exports,arguments)
+},{"./first_name":320,"./last_name":322,"./name":323,"./prefix":324,"./suffix":325,"./title":326,"dup":179}],322:[function(require,module,exports){
 module["exports"] = [
   "Abeyta",
   "Abrego",
@@ -23942,7 +31411,7 @@ module["exports"] = [
   "Zúñiga"
 ];
 
-},{}],333:[function(require,module,exports){
+},{}],323:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name} #{last_name}",
   "#{first_name} #{last_name} #{last_name}",
@@ -23951,16 +31420,16 @@ module["exports"] = [
   "#{first_name} #{last_name} #{last_name}"
 ];
 
-},{}],334:[function(require,module,exports){
+},{}],324:[function(require,module,exports){
 module["exports"] = [
   "Sr.",
   "Sra.",
   "Sta."
 ];
 
-},{}],335:[function(require,module,exports){
-arguments[4][196][0].apply(exports,arguments)
-},{"dup":196}],336:[function(require,module,exports){
+},{}],325:[function(require,module,exports){
+arguments[4][183][0].apply(exports,arguments)
+},{"dup":183}],326:[function(require,module,exports){
 module["exports"] = {
   "descriptor": [
     "Jefe",
@@ -24052,7 +31521,7 @@ module["exports"] = {
   ]
 };
 
-},{}],337:[function(require,module,exports){
+},{}],327:[function(require,module,exports){
 module["exports"] = [
   "9##-###-###",
   "9##.###.###",
@@ -24060,9 +31529,9 @@ module["exports"] = [
   "9########"
 ];
 
-},{}],338:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":337,"dup":74}],339:[function(require,module,exports){
+},{}],328:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":327,"dup":55}],329:[function(require,module,exports){
 module["exports"] = [
   " s/n.",
   ", #",
@@ -24073,9 +31542,9 @@ module["exports"] = [
   " ####"
 ];
 
-},{}],340:[function(require,module,exports){
-arguments[4][281][0].apply(exports,arguments)
-},{"dup":281}],341:[function(require,module,exports){
+},{}],330:[function(require,module,exports){
+arguments[4][271][0].apply(exports,arguments)
+},{"dup":271}],331:[function(require,module,exports){
 module["exports"] = [
   "Aguascalientes",
   "Apodaca",
@@ -24209,9 +31678,9 @@ module["exports"] = [
   "Zitacuaro"
 ];
 
-},{}],342:[function(require,module,exports){
-arguments[4][121][0].apply(exports,arguments)
-},{"dup":121}],343:[function(require,module,exports){
+},{}],332:[function(require,module,exports){
+arguments[4][107][0].apply(exports,arguments)
+},{"dup":107}],333:[function(require,module,exports){
 module["exports"] = [
   "Afganistán",
   "Albania",
@@ -24395,12 +31864,12 @@ module["exports"] = [
   "Zimbabwe"
 ];
 
-},{}],344:[function(require,module,exports){
+},{}],334:[function(require,module,exports){
 module["exports"] = [
   "México"
 ];
 
-},{}],345:[function(require,module,exports){
+},{}],335:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -24418,16 +31887,16 @@ address.street = require("./street");
 address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
-},{"./building_number":339,"./city":340,"./city_prefix":341,"./city_suffix":342,"./country":343,"./default_country":344,"./postcode":346,"./secondary_address":347,"./state":348,"./state_abbr":349,"./street":350,"./street_address":351,"./street_name":352,"./street_suffix":353,"./time_zone":354}],346:[function(require,module,exports){
-arguments[4][309][0].apply(exports,arguments)
-},{"dup":309}],347:[function(require,module,exports){
+},{"./building_number":329,"./city":330,"./city_prefix":331,"./city_suffix":332,"./country":333,"./default_country":334,"./postcode":336,"./secondary_address":337,"./state":338,"./state_abbr":339,"./street":340,"./street_address":341,"./street_name":342,"./street_suffix":343,"./time_zone":344}],336:[function(require,module,exports){
+arguments[4][299][0].apply(exports,arguments)
+},{"dup":299}],337:[function(require,module,exports){
 module["exports"] = [
   "Esc. ###",
   "Puerta ###",
   "Edificio #"
 ];
 
-},{}],348:[function(require,module,exports){
+},{}],338:[function(require,module,exports){
 module["exports"] = [
   "Aguascalientes",
   "Baja California Norte",
@@ -24462,7 +31931,7 @@ module["exports"] = [
   "Zacatecas"
 ];
 
-},{}],349:[function(require,module,exports){
+},{}],339:[function(require,module,exports){
 module["exports"] = [
   "AS",
   "BC",
@@ -24498,7 +31967,7 @@ module["exports"] = [
   "ZS"
 ];
 
-},{}],350:[function(require,module,exports){
+},{}],340:[function(require,module,exports){
 module["exports"] = [
 	"20 de Noviembre",
 	"Cinco de Mayo",
@@ -24540,9 +32009,9 @@ module["exports"] = [
 	"Jalisco",
 	"Avena"
 ];
-},{}],351:[function(require,module,exports){
-arguments[4][314][0].apply(exports,arguments)
-},{"dup":314}],352:[function(require,module,exports){
+},{}],341:[function(require,module,exports){
+arguments[4][304][0].apply(exports,arguments)
+},{"dup":304}],342:[function(require,module,exports){
 module["exports"] = [
   "#{street_suffix} #{Name.first_name}",
   "#{street_suffix} #{Name.first_name} #{Name.last_name}",
@@ -24553,9 +32022,9 @@ module["exports"] = [
 
 ];
 
-},{}],353:[function(require,module,exports){
-arguments[4][316][0].apply(exports,arguments)
-},{"dup":316}],354:[function(require,module,exports){
+},{}],343:[function(require,module,exports){
+arguments[4][306][0].apply(exports,arguments)
+},{"dup":306}],344:[function(require,module,exports){
 module["exports"] = [
   "Pacífico/Midway",
   "Pacífico/Pago_Pago",
@@ -24701,7 +32170,7 @@ module["exports"] = [
   "Pacífico/Apia"
 ];
 
-},{}],355:[function(require,module,exports){
+},{}],345:[function(require,module,exports){
 module["exports"] = [
   "5##-###-###",
   "5##.###.###",
@@ -24709,315 +32178,318 @@ module["exports"] = [
   "5########"
 ];
 
-},{}],356:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":355,"dup":56}],357:[function(require,module,exports){
+},{}],346:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":345,"dup":37}],347:[function(require,module,exports){
 module["exports"] = [
    "rojo",
-   "verde",
-   "azul",
-   "amarillo",
-   "morado",
-   "Menta verde",
-   "teal",
-   "blanco",
-   "negro",
-   "Naranja",
-   "Rosa",
-   "gris",
-   "marrón",
-   "violeta",
-   "turquesa",
-   "tan",
-   "cielo azul",
-   "salmón",
-   "ciruela",
-   "orquídea",
-   "aceituna",
-   "magenta",
-   "Lima",
-   "marfil",
-   "índigo",
-   "oro",
-   "fucsia",
-   "cian",
-   "azul",
-   "lavanda",
-   "plata"
+   "verde",
+   "azul",
+   "amarillo",
+   "morado",
+   "Menta verde",
+   "teal",
+   "blanco",
+   "negro",
+   "Naranja",
+   "Rosa",
+   "gris",
+   "marrón",
+   "violeta",
+   "turquesa",
+   "tan",
+   "cielo azul",
+   "salmón",
+   "ciruela",
+   "orquídea",
+   "aceituna",
+   "magenta",
+   "Lima",
+   "marfil",
+   "índigo",
+   "oro",
+   "fucsia",
+   "cian",
+   "azul",
+   "lavanda",
+   "plata"
 ];
 
-},{}],358:[function(require,module,exports){
+},{}],348:[function(require,module,exports){
 module["exports"] = [
    "Libros",
-   "Películas",
-   "Música",
-   "Juegos",
-   "Electrónica",
-   "Ordenadores",
-   "Hogar",
-   "Jardín",
-   "Herramientas",
-   "Ultramarinos",
-   "Salud",
-   "Belleza",
-   "Juguetes",
-   "Kids",
-   "Baby",
-   "Ropa",
-   "Zapatos",
-   "Joyería",
-   "Deportes",
-   "Aire libre",
-   "Automoción",
-   "Industrial"
+   "Películas",
+   "Música",
+   "Juegos",
+   "Electrónica",
+   "Ordenadores",
+   "Hogar",
+   "Jardín",
+   "Herramientas",
+   "Ultramarinos",
+   "Salud",
+   "Belleza",
+   "Juguetes",
+   "Kids",
+   "Baby",
+   "Ropa",
+   "Zapatos",
+   "Joyería",
+   "Deportes",
+   "Aire libre",
+   "Automoción",
+   "Industrial"
 ];
 
-},{}],359:[function(require,module,exports){
-arguments[4][148][0].apply(exports,arguments)
-},{"./color":357,"./department":358,"./product_name":360,"dup":148}],360:[function(require,module,exports){
+},{}],349:[function(require,module,exports){
+arguments[4][134][0].apply(exports,arguments)
+},{"./color":347,"./department":348,"./product_name":350,"dup":134}],350:[function(require,module,exports){
 module["exports"] = {
 "adjective": [
-     "Pequeño",
-     "Ergonómico",
-     "Rústico",
-     "Inteligente",
-     "Gorgeous",
-     "Increíble",
-     "Fantástico",
-     "Práctica",
-     "Elegante",
-     "Increíble",
-     "Genérica",
-     "Artesanal",
-     "Hecho a mano",
-     "Licencia",
-     "Refinado",
-     "Sin marca",
-     "Sabrosa"
-   ],
+     "Pequeño",
+     "Ergonómico",
+     "Rústico",
+     "Inteligente",
+     "Gorgeous",
+     "Increíble",
+     "Fantástico",
+     "Práctica",
+     "Elegante",
+     "Increíble",
+     "Genérica",
+     "Artesanal",
+     "Hecho a mano",
+     "Licencia",
+     "Refinado",
+     "Sin marca",
+     "Sabrosa"
+   ],
 "material": [
-     "Acero",
-     "Madera",
-     "Hormigón",
-     "Plástico",
-     "Cotton",
-     "Granito",
-     "Caucho",
-     "Metal",
-     "Soft",
-     "Fresco",
-     "Frozen"
-   ],
+     "Acero",
+     "Madera",
+     "Hormigón",
+     "Plástico",
+     "Cotton",
+     "Granito",
+     "Caucho",
+     "Metal",
+     "Soft",
+     "Fresco",
+     "Frozen"
+   ],
 "product": [
-     "Presidente",
-     "Auto",
-     "Computadora",
-     "Teclado",
-     "Ratón",
-     "Bike",
-     "Pelota",
-     "Guantes",
-     "Pantalones",
-     "Camisa",
-     "Mesa",
-     "Zapatos",
-     "Sombrero",
-     "Toallas",
-     "Jabón",
-     "Tuna",
-     "Pollo",
-     "Pescado",
-     "Queso",
-     "Tocino",
-     "Pizza",
-     "Ensalada",
-     "Embutidos"
+     "Presidente",
+     "Auto",
+     "Computadora",
+     "Teclado",
+     "Ratón",
+     "Bike",
+     "Pelota",
+     "Guantes",
+     "Pantalones",
+     "Camisa",
+     "Mesa",
+     "Zapatos",
+     "Sombrero",
+     "Toallas",
+     "Jabón",
+     "Tuna",
+     "Pollo",
+     "Pescado",
+     "Queso",
+     "Tocino",
+     "Pizza",
+     "Ensalada",
+     "Embutidos"
   ]
 };
 
-},{}],361:[function(require,module,exports){
-arguments[4][320][0].apply(exports,arguments)
-},{"dup":320}],362:[function(require,module,exports){
+},{}],351:[function(require,module,exports){
+arguments[4][310][0].apply(exports,arguments)
+},{"dup":310}],352:[function(require,module,exports){
 module["exports"] = [
   "Clics y mortero",
-  "Valor añadido",
-  "Vertical",
-  "Proactivo",
-  "Robusto",
-  "Revolucionario",
-  "Escalable",
-  "De vanguardia",
-  "Innovador",
-  "Intuitivo",
-  "Estratégico",
-  "E-business",
-  "Misión crítica",
-  "Pegajosa",
-  "Doce y cincuenta y nueve de la noche",
-  "24/7",
-  "De extremo a extremo",
-  "Global",
-  "B2B",
-  "B2C",
-  "Granular",
-  "Fricción",
-  "Virtual",
-  "Viral",
-  "Dinámico",
-  "24/365",
-  "Mejor de su clase",
-  "Asesino",
-  "Magnética",
-  "Filo sangriento",
-  "Habilitado web",
-  "Interactiva",
-  "Punto com",
-  "Sexy",
-  "Back-end",
-  "Tiempo real",
-  "Eficiente",
-  "Frontal",
-  "Distribuida",
-  "Sin costura",
-  "Extensible",
-  "Llave en mano",
-  "Clase mundial",
-  "Código abierto",
-  "Multiplataforma",
-  "Cross-media",
-  "Sinérgico",
-  "ladrillos y clics",
-  "Fuera de la caja",
-  "Empresa",
-  "Integrado",
-  "Impactante",
-  "Inalámbrico",
-  "Transparente",
-  "Próxima generación",
-  "Innovador",
-  "User-centric",
-  "Visionario",
-  "A medida",
-  "Ubicua",
-  "Enchufa y juega",
-  "Colaboración",
-  "Convincente",
-  "Holístico",
-  "Ricos"
+  "Valor añadido",
+  "Vertical",
+  "Proactivo",
+  "Robusto",
+  "Revolucionario",
+  "Escalable",
+  "De vanguardia",
+  "Innovador",
+  "Intuitivo",
+  "Estratégico",
+  "E-business",
+  "Misión crítica",
+  "Pegajosa",
+  "Doce y cincuenta y nueve de la noche",
+  "24/7",
+  "De extremo a extremo",
+  "Global",
+  "B2B",
+  "B2C",
+  "Granular",
+  "Fricción",
+  "Virtual",
+  "Viral",
+  "Dinámico",
+  "24/365",
+  "Mejor de su clase",
+  "Asesino",
+  "Magnética",
+  "Filo sangriento",
+  "Habilitado web",
+  "Interactiva",
+  "Punto com",
+  "Sexy",
+  "Back-end",
+  "Tiempo real",
+  "Eficiente",
+  "Frontal",
+  "Distribuida",
+  "Sin costura",
+  "Extensible",
+  "Llave en mano",
+  "Clase mundial",
+  "Código abierto",
+  "Multiplataforma",
+  "Cross-media",
+  "Sinérgico",
+  "ladrillos y clics",
+  "Fuera de la caja",
+  "Empresa",
+  "Integrado",
+  "Impactante",
+  "Inalámbrico",
+  "Transparente",
+  "Próxima generación",
+  "Innovador",
+  "User-centric",
+  "Visionario",
+  "A medida",
+  "Ubicua",
+  "Enchufa y juega",
+  "Colaboración",
+  "Convincente",
+  "Holístico",
+  "Ricos"
 ];
-},{}],363:[function(require,module,exports){
+
+},{}],353:[function(require,module,exports){
 module["exports"] = [
    "sinergias",
-   "web-readiness",
-   "paradigmas",
-   "mercados",
-   "asociaciones",
-   "infraestructuras",
-   "plataformas",
-   "iniciativas",
-   "canales",
-   "ojos",
-   "comunidades",
-   "ROI",
-   "soluciones",
-   "minoristas electrónicos",
-   "e-servicios",
-   "elementos de acción",
-   "portales",
-   "nichos",
-   "tecnologías",
-   "contenido",
-   "vortales",
-   "cadenas de suministro",
-   "convergencia",
-   "relaciones",
-   "arquitecturas",
-   "interfaces",
-   "mercados electrónicos",
-   "e-commerce",
-   "sistemas",
-   "ancho de banda",
-   "infomediarios",
-   "modelos",
-   "Mindshare",
-   "entregables",
-   "usuarios",
-   "esquemas",
-   "redes",
-   "aplicaciones",
-   "métricas",
-   "e-business",
-   "funcionalidades",
-   "experiencias",
-   "servicios web",
-   "metodologías"
+   "web-readiness",
+   "paradigmas",
+   "mercados",
+   "asociaciones",
+   "infraestructuras",
+   "plataformas",
+   "iniciativas",
+   "canales",
+   "ojos",
+   "comunidades",
+   "ROI",
+   "soluciones",
+   "minoristas electrónicos",
+   "e-servicios",
+   "elementos de acción",
+   "portales",
+   "nichos",
+   "tecnologías",
+   "contenido",
+   "vortales",
+   "cadenas de suministro",
+   "convergencia",
+   "relaciones",
+   "arquitecturas",
+   "interfaces",
+   "mercados electrónicos",
+   "e-commerce",
+   "sistemas",
+   "ancho de banda",
+   "infomediarios",
+   "modelos",
+   "Mindshare",
+   "entregables",
+   "usuarios",
+   "esquemas",
+   "redes",
+   "aplicaciones",
+   "métricas",
+   "e-business",
+   "funcionalidades",
+   "experiencias",
+   "servicios web",
+   "metodologías"
 ];
-},{}],364:[function(require,module,exports){
+
+},{}],354:[function(require,module,exports){
 module["exports"] = [
    "poner en práctica",
-   "utilizar",
-   "integrar",
-   "racionalizar",
-   "optimizar",
-   "evolucionar",
-   "transformar",
-   "abrazar",
-   "habilitar",
-   "orquestar",
-   "apalancamiento",
-   "reinventar",
-   "agregado",
-   "arquitecto",
-   "mejorar",
-   "incentivar",
-   "transformarse",
-   "empoderar",
-   "Envisioneer",
-   "monetizar",
-   "arnés",
-   "facilitar",
-   "aprovechar",
-   "desintermediar",
-   "sinergia",
-   "estrategias",
-   "desplegar",
-   "marca",
-   "crecer",
-   "objetivo",
-   "sindicato",
-   "sintetizar",
-   "entregue",
-   "malla",
-   "incubar",
-   "enganchar",
-   "maximizar",
-   "punto de referencia",
-   "acelerar",
-   "reintermediate",
-   "pizarra",
-   "visualizar",
-   "reutilizar",
-   "innovar",
-   "escala",
-   "desatar",
-   "conducir",
-   "extender",
-   "ingeniero",
-   "revolucionar",
-   "generar",
-   "explotar",
-   "transición",
-   "e-enable",
-   "repetir",
-   "cultivar",
-   "matriz",
-   "productize",
-   "redefinir",
-   "recontextualizar"
+   "utilizar",
+   "integrar",
+   "racionalizar",
+   "optimizar",
+   "evolucionar",
+   "transformar",
+   "abrazar",
+   "habilitar",
+   "orquestar",
+   "apalancamiento",
+   "reinventar",
+   "agregado",
+   "arquitecto",
+   "mejorar",
+   "incentivar",
+   "transformarse",
+   "empoderar",
+   "Envisioneer",
+   "monetizar",
+   "arnés",
+   "facilitar",
+   "aprovechar",
+   "desintermediar",
+   "sinergia",
+   "estrategias",
+   "desplegar",
+   "marca",
+   "crecer",
+   "objetivo",
+   "sindicato",
+   "sintetizar",
+   "entregue",
+   "malla",
+   "incubar",
+   "enganchar",
+   "maximizar",
+   "punto de referencia",
+   "acelerar",
+   "reintermediate",
+   "pizarra",
+   "visualizar",
+   "reutilizar",
+   "innovar",
+   "escala",
+   "desatar",
+   "conducir",
+   "extender",
+   "ingeniero",
+   "revolucionar",
+   "generar",
+   "explotar",
+   "transición",
+   "e-enable",
+   "repetir",
+   "cultivar",
+   "matriz",
+   "productize",
+   "redefinir",
+   "recontextualizar"
 ]
-},{}],365:[function(require,module,exports){
-arguments[4][321][0].apply(exports,arguments)
-},{"dup":321}],366:[function(require,module,exports){
+
+},{}],355:[function(require,module,exports){
+arguments[4][311][0].apply(exports,arguments)
+},{"dup":311}],356:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
@@ -25029,13 +32501,13 @@ company.name = require("./name");
 company.bs_adjective = require("./bs_adjective");
 company.bs_noun = require("./bs_noun");
 
-},{"./adjective":361,"./bs_adjective":362,"./bs_noun":363,"./bs_verb":364,"./descriptor":365,"./name":367,"./noun":368,"./suffix":369}],367:[function(require,module,exports){
-arguments[4][323][0].apply(exports,arguments)
-},{"dup":323}],368:[function(require,module,exports){
-arguments[4][324][0].apply(exports,arguments)
-},{"dup":324}],369:[function(require,module,exports){
-arguments[4][325][0].apply(exports,arguments)
-},{"dup":325}],370:[function(require,module,exports){
+},{"./adjective":351,"./bs_adjective":352,"./bs_noun":353,"./bs_verb":354,"./descriptor":355,"./name":357,"./noun":358,"./suffix":359}],357:[function(require,module,exports){
+arguments[4][313][0].apply(exports,arguments)
+},{"dup":313}],358:[function(require,module,exports){
+arguments[4][314][0].apply(exports,arguments)
+},{"dup":314}],359:[function(require,module,exports){
+arguments[4][315][0].apply(exports,arguments)
+},{"dup":315}],360:[function(require,module,exports){
 var es_MX = {};
 module['exports'] = es_MX;
 es_MX.title = "Spanish Mexico";
@@ -25049,7 +32521,7 @@ es_MX.cell_phone = require("./cell_phone");
 es_MX.lorem = require("./lorem");
 es_MX.commerce = require("./commerce");
 es_MX.team = require("./team");
-},{"./address":345,"./cell_phone":356,"./commerce":359,"./company":366,"./internet":373,"./lorem":374,"./name":378,"./phone_number":385,"./team":387}],371:[function(require,module,exports){
+},{"./address":335,"./cell_phone":346,"./commerce":349,"./company":356,"./internet":363,"./lorem":364,"./name":368,"./phone_number":375,"./team":377}],361:[function(require,module,exports){
 module["exports"] = [
   "com",
   "mx",
@@ -25059,7 +32531,7 @@ module["exports"] = [
   "gob.mx"
 ];
 
-},{}],372:[function(require,module,exports){
+},{}],362:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.com",
@@ -25068,13 +32540,13 @@ module["exports"] = [
   "corpfolder.com"
 ];
 
-},{}],373:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":371,"./free_email":372,"dup":64}],374:[function(require,module,exports){
-arguments[4][188][0].apply(exports,arguments)
-},{"./supplemental":375,"./words":376,"dup":188}],375:[function(require,module,exports){
-arguments[4][189][0].apply(exports,arguments)
-},{"dup":189}],376:[function(require,module,exports){
+},{}],363:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":361,"./free_email":362,"dup":45}],364:[function(require,module,exports){
+arguments[4][175][0].apply(exports,arguments)
+},{"./supplemental":365,"./words":366,"dup":175}],365:[function(require,module,exports){
+arguments[4][176][0].apply(exports,arguments)
+},{"dup":176}],366:[function(require,module,exports){
 module["exports"] = [
 "Abacalero",
 "Abacería",
@@ -25346,7 +32818,7 @@ module["exports"] = [
 "Incrustación"
 ];
 
-},{}],377:[function(require,module,exports){
+},{}],367:[function(require,module,exports){
 module["exports"] = [
 "Aarón",
 "Abraham",
@@ -25653,9 +33125,9 @@ module["exports"] = [
 "Yaretzi",
 "Zoe"
 ]
-},{}],378:[function(require,module,exports){
-arguments[4][192][0].apply(exports,arguments)
-},{"./first_name":377,"./last_name":379,"./name":380,"./prefix":381,"./suffix":382,"./title":383,"dup":192}],379:[function(require,module,exports){
+},{}],368:[function(require,module,exports){
+arguments[4][179][0].apply(exports,arguments)
+},{"./first_name":367,"./last_name":369,"./name":370,"./prefix":371,"./suffix":372,"./title":373,"dup":179}],369:[function(require,module,exports){
 module["exports"] = [
   "Abeyta",
 "Abrego",
@@ -26346,7 +33818,7 @@ module["exports"] = [
 "Zúñiga"
 ];
 
-},{}],380:[function(require,module,exports){
+},{}],370:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name} #{last_name}",
   "#{first_name} #{last_name} de #{last_name}",
@@ -26355,9 +33827,9 @@ module["exports"] = [
   "#{first_name} #{last_name} #{last_name}"
 ];
 
-},{}],381:[function(require,module,exports){
-arguments[4][334][0].apply(exports,arguments)
-},{"dup":334}],382:[function(require,module,exports){
+},{}],371:[function(require,module,exports){
+arguments[4][324][0].apply(exports,arguments)
+},{"dup":324}],372:[function(require,module,exports){
 module["exports"] = [
   "Jr.",
   "Sr.",
@@ -26376,7 +33848,7 @@ module["exports"] = [
   "Mtro."
 ];
 
-},{}],383:[function(require,module,exports){
+},{}],373:[function(require,module,exports){
  module["exports"] = {
   "descriptor": [
     "Jefe",
@@ -26473,7 +33945,7 @@ module["exports"] = [
   ]
 };
 
-},{}],384:[function(require,module,exports){
+},{}],374:[function(require,module,exports){
 module["exports"] = [
   "5###-###-###",
   "5##.###.###",
@@ -26481,90 +33953,90 @@ module["exports"] = [
   "5########"
 ];
 
-},{}],385:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":384,"dup":74}],386:[function(require,module,exports){
+},{}],375:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":374,"dup":55}],376:[function(require,module,exports){
 module["exports"] = [
   "hormigas",
-   "murciélagos",
-   "osos",
-   "abejas",
-   "pájaros",
-   "búfalo",
-   "gatos",
-   "pollos",
-   "ganado",
-   "perros",
-   "delfines",
-   "patos",
-   "elefantes",
-   "peces",
-   "zorros",
-   "ranas",
-   "gansos",
-   "cabras",
-   "caballos",
-   "canguros",
-   "leones",
-   "monos",
-   "búhos",
-   "bueyes",
-   "pingüinos",
-   "pueblo",
-   "cerdos",
-   "conejos",
-   "ovejas",
-   "tigres",
-   "ballenas",
-   "lobos",
-   "cebras",
-   "almas en pena",
-   "cuervos",
-   "gatos negros",
-   "quimeras",
-   "fantasmas",
-   "conspiradores",
-   "dragones",
-   "enanos",
-   "duendes",
-   "encantadores",
-   "exorcistas",
-   "hijos",
-   "enemigos",
-   "gigantes",
-   "gnomos",
-   "duendes",
-   "gansos",
-   "grifos",
-   "licántropos",
-   "némesis",
-   "ogros",
-   "oráculos",
-   "profetas",
-   "hechiceros",
-   "arañas",
-   "espíritus",
-   "vampiros",
-   "brujos",
-   "zorras",
-   "hombres lobo",
-   "brujas",
-   "adoradores",
-   "zombies",
-   "druidas"
+   "murciélagos",
+   "osos",
+   "abejas",
+   "pájaros",
+   "búfalo",
+   "gatos",
+   "pollos",
+   "ganado",
+   "perros",
+   "delfines",
+   "patos",
+   "elefantes",
+   "peces",
+   "zorros",
+   "ranas",
+   "gansos",
+   "cabras",
+   "caballos",
+   "canguros",
+   "leones",
+   "monos",
+   "búhos",
+   "bueyes",
+   "pingüinos",
+   "pueblo",
+   "cerdos",
+   "conejos",
+   "ovejas",
+   "tigres",
+   "ballenas",
+   "lobos",
+   "cebras",
+   "almas en pena",
+   "cuervos",
+   "gatos negros",
+   "quimeras",
+   "fantasmas",
+   "conspiradores",
+   "dragones",
+   "enanos",
+   "duendes",
+   "encantadores",
+   "exorcistas",
+   "hijos",
+   "enemigos",
+   "gigantes",
+   "gnomos",
+   "duendes",
+   "gansos",
+   "grifos",
+   "licántropos",
+   "némesis",
+   "ogros",
+   "oráculos",
+   "profetas",
+   "hechiceros",
+   "arañas",
+   "espíritus",
+   "vampiros",
+   "brujos",
+   "zorras",
+   "hombres lobo",
+   "brujas",
+   "adoradores",
+   "zombies",
+   "druidas"
 ];
 
-},{}],387:[function(require,module,exports){
-arguments[4][201][0].apply(exports,arguments)
-},{"./creature":386,"./name":388,"dup":201}],388:[function(require,module,exports){
-arguments[4][202][0].apply(exports,arguments)
-},{"dup":202}],389:[function(require,module,exports){
+},{}],377:[function(require,module,exports){
+arguments[4][190][0].apply(exports,arguments)
+},{"./creature":376,"./name":378,"dup":190}],378:[function(require,module,exports){
+arguments[4][191][0].apply(exports,arguments)
+},{"dup":191}],379:[function(require,module,exports){
 var fa = {};
 module['exports'] = fa;
 fa.title = "Farsi";
 fa.name = require("./name");
 
-},{"./name":391}],390:[function(require,module,exports){
+},{"./name":381}],380:[function(require,module,exports){
 module["exports"] = [
   "آبان دخت",
   "آبتین",
@@ -27290,14 +34762,14 @@ module["exports"] = [
   "یوشیتا"
 ];
 
-},{}],391:[function(require,module,exports){
+},{}],381:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
 name.last_name = require("./last_name");
 name.prefix = require("./prefix");
 
-},{"./first_name":390,"./last_name":392,"./prefix":393}],392:[function(require,module,exports){
+},{"./first_name":380,"./last_name":382,"./prefix":383}],382:[function(require,module,exports){
 module["exports"] = [
   "عارف",
   "عاشوری",
@@ -27445,14 +34917,14 @@ module["exports"] = [
   "یلدا"
 ];
 
-},{}],393:[function(require,module,exports){
+},{}],383:[function(require,module,exports){
 module["exports"] = [
   "آقای",
   "خانم",
   "دکتر"
 ];
 
-},{}],394:[function(require,module,exports){
+},{}],384:[function(require,module,exports){
 module["exports"] = [
   "####",
   "###",
@@ -27460,9 +34932,9 @@ module["exports"] = [
   "#"
 ];
 
-},{}],395:[function(require,module,exports){
-arguments[4][76][0].apply(exports,arguments)
-},{"dup":76}],396:[function(require,module,exports){
+},{}],385:[function(require,module,exports){
+arguments[4][57][0].apply(exports,arguments)
+},{"dup":57}],386:[function(require,module,exports){
 module["exports"] = [
   "Paris",
   "Marseille",
@@ -27566,12 +35038,12 @@ module["exports"] = [
   "Cholet"
 ];
 
-},{}],397:[function(require,module,exports){
+},{}],387:[function(require,module,exports){
 module["exports"] = [
   "France"
 ];
 
-},{}],398:[function(require,module,exports){
+},{}],388:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.building_number = require("./building_number");
@@ -27586,15 +35058,15 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":394,"./city":395,"./city_name":396,"./default_country":397,"./postcode":399,"./secondary_address":400,"./state":401,"./street_address":402,"./street_name":403,"./street_prefix":404,"./street_suffix":405}],399:[function(require,module,exports){
-arguments[4][309][0].apply(exports,arguments)
-},{"dup":309}],400:[function(require,module,exports){
+},{"./building_number":384,"./city":385,"./city_name":386,"./default_country":387,"./postcode":389,"./secondary_address":390,"./state":391,"./street_address":392,"./street_name":393,"./street_prefix":394,"./street_suffix":395}],389:[function(require,module,exports){
+arguments[4][299][0].apply(exports,arguments)
+},{"dup":299}],390:[function(require,module,exports){
 module["exports"] = [
   "Apt. ###",
   "# étage"
 ];
 
-},{}],401:[function(require,module,exports){
+},{}],391:[function(require,module,exports){
 module["exports"] = [
   "Alsace",
   "Aquitaine",
@@ -27620,14 +35092,14 @@ module["exports"] = [
   "Rhône-Alpes"
 ];
 
-},{}],402:[function(require,module,exports){
-arguments[4][132][0].apply(exports,arguments)
-},{"dup":132}],403:[function(require,module,exports){
+},{}],392:[function(require,module,exports){
+arguments[4][118][0].apply(exports,arguments)
+},{"dup":118}],393:[function(require,module,exports){
 module["exports"] = [
   "#{street_prefix} #{street_suffix}"
 ];
 
-},{}],404:[function(require,module,exports){
+},{}],394:[function(require,module,exports){
 module["exports"] = [
   "Allée, Voie",
   "Rue",
@@ -27639,7 +35111,7 @@ module["exports"] = [
   "Place"
 ];
 
-},{}],405:[function(require,module,exports){
+},{}],395:[function(require,module,exports){
 module["exports"] = [
   "de l'Abbaye",
   "Adolphe Mille",
@@ -27709,27 +35181,27 @@ module["exports"] = [
   "Zadkine"
 ];
 
-},{}],406:[function(require,module,exports){
-arguments[4][150][0].apply(exports,arguments)
-},{"dup":150}],407:[function(require,module,exports){
-arguments[4][151][0].apply(exports,arguments)
-},{"dup":151}],408:[function(require,module,exports){
-arguments[4][152][0].apply(exports,arguments)
-},{"dup":152}],409:[function(require,module,exports){
-arguments[4][153][0].apply(exports,arguments)
-},{"dup":153}],410:[function(require,module,exports){
-arguments[4][154][0].apply(exports,arguments)
-},{"dup":154}],411:[function(require,module,exports){
-arguments[4][155][0].apply(exports,arguments)
-},{"./adjective":406,"./bs_adjective":407,"./bs_noun":408,"./bs_verb":409,"./descriptor":410,"./name":412,"./noun":413,"./suffix":414,"dup":155}],412:[function(require,module,exports){
+},{}],396:[function(require,module,exports){
+arguments[4][136][0].apply(exports,arguments)
+},{"dup":136}],397:[function(require,module,exports){
+arguments[4][137][0].apply(exports,arguments)
+},{"dup":137}],398:[function(require,module,exports){
+arguments[4][138][0].apply(exports,arguments)
+},{"dup":138}],399:[function(require,module,exports){
+arguments[4][139][0].apply(exports,arguments)
+},{"dup":139}],400:[function(require,module,exports){
+arguments[4][140][0].apply(exports,arguments)
+},{"dup":140}],401:[function(require,module,exports){
+arguments[4][141][0].apply(exports,arguments)
+},{"./adjective":396,"./bs_adjective":397,"./bs_noun":398,"./bs_verb":399,"./descriptor":400,"./name":402,"./noun":403,"./suffix":404,"dup":141}],402:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name} et #{Name.last_name}"
 ];
 
-},{}],413:[function(require,module,exports){
-arguments[4][157][0].apply(exports,arguments)
-},{"dup":157}],414:[function(require,module,exports){
+},{}],403:[function(require,module,exports){
+arguments[4][143][0].apply(exports,arguments)
+},{"dup":143}],404:[function(require,module,exports){
 module["exports"] = [
   "SARL",
   "SA",
@@ -27741,7 +35213,7 @@ module["exports"] = [
   "EI"
 ];
 
-},{}],415:[function(require,module,exports){
+},{}],405:[function(require,module,exports){
 var fr = {};
 module['exports'] = fr;
 fr.title = "French";
@@ -27752,7 +35224,7 @@ fr.lorem = require("./lorem");
 fr.name = require("./name");
 fr.phone_number = require("./phone_number");
 
-},{"./address":398,"./company":411,"./internet":418,"./lorem":419,"./name":423,"./phone_number":429}],416:[function(require,module,exports){
+},{"./address":388,"./company":401,"./internet":408,"./lorem":409,"./name":413,"./phone_number":419}],406:[function(require,module,exports){
 module["exports"] = [
   "com",
   "fr",
@@ -27763,22 +35235,22 @@ module["exports"] = [
   "org"
 ];
 
-},{}],417:[function(require,module,exports){
+},{}],407:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.fr",
   "hotmail.fr"
 ];
 
-},{}],418:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":416,"./free_email":417,"dup":64}],419:[function(require,module,exports){
-arguments[4][188][0].apply(exports,arguments)
-},{"./supplemental":420,"./words":421,"dup":188}],420:[function(require,module,exports){
-arguments[4][189][0].apply(exports,arguments)
-},{"dup":189}],421:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],422:[function(require,module,exports){
+},{}],408:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":406,"./free_email":407,"dup":45}],409:[function(require,module,exports){
+arguments[4][175][0].apply(exports,arguments)
+},{"./supplemental":410,"./words":411,"dup":175}],410:[function(require,module,exports){
+arguments[4][176][0].apply(exports,arguments)
+},{"dup":176}],411:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],412:[function(require,module,exports){
 module["exports"] = [
   "Enzo",
   "Lucas",
@@ -27871,7 +35343,7 @@ module["exports"] = [
   "Mélissa"
 ];
 
-},{}],423:[function(require,module,exports){
+},{}],413:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -27880,7 +35352,7 @@ name.prefix = require("./prefix");
 name.title = require("./title");
 name.name = require("./name");
 
-},{"./first_name":422,"./last_name":424,"./name":425,"./prefix":426,"./title":427}],424:[function(require,module,exports){
+},{"./first_name":412,"./last_name":414,"./name":415,"./prefix":416,"./title":417}],414:[function(require,module,exports){
 module["exports"] = [
   "Martin",
   "Bernard",
@@ -28034,14 +35506,14 @@ module["exports"] = [
   "Cousin"
 ];
 
-},{}],425:[function(require,module,exports){
+},{}],415:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name}",
   "#{first_name} #{last_name}",
   "#{last_name} #{first_name}"
 ];
 
-},{}],426:[function(require,module,exports){
+},{}],416:[function(require,module,exports){
 module["exports"] = [
   "M",
   "Mme",
@@ -28050,7 +35522,7 @@ module["exports"] = [
   "Prof"
 ];
 
-},{}],427:[function(require,module,exports){
+},{}],417:[function(require,module,exports){
 module["exports"] = {
   "job": [
     "Superviseur",
@@ -28074,7 +35546,7 @@ module["exports"] = {
   ]
 };
 
-},{}],428:[function(require,module,exports){
+},{}],418:[function(require,module,exports){
 module["exports"] = [
   "01########",
   "02########",
@@ -28092,15 +35564,15 @@ module["exports"] = [
   "+33 7########"
 ];
 
-},{}],429:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":428,"dup":74}],430:[function(require,module,exports){
-arguments[4][223][0].apply(exports,arguments)
-},{"dup":223}],431:[function(require,module,exports){
-arguments[4][256][0].apply(exports,arguments)
-},{"./default_country":430,"./postcode":432,"./state":433,"./state_abbr":434,"dup":256}],432:[function(require,module,exports){
-arguments[4][225][0].apply(exports,arguments)
-},{"dup":225}],433:[function(require,module,exports){
+},{}],419:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":418,"dup":55}],420:[function(require,module,exports){
+arguments[4][212][0].apply(exports,arguments)
+},{"dup":212}],421:[function(require,module,exports){
+arguments[4][246][0].apply(exports,arguments)
+},{"./default_country":420,"./postcode":422,"./state":423,"./state_abbr":424,"dup":246}],422:[function(require,module,exports){
+arguments[4][214][0].apply(exports,arguments)
+},{"dup":214}],423:[function(require,module,exports){
 module["exports"] = [
   "Alberta",
   "Colombie-Britannique",
@@ -28117,7 +35589,7 @@ module["exports"] = [
   "Yukon"
 ];
 
-},{}],434:[function(require,module,exports){
+},{}],424:[function(require,module,exports){
 module["exports"] = [
   "AB",
   "BC",
@@ -28134,7 +35606,7 @@ module["exports"] = [
   "YK"
 ];
 
-},{}],435:[function(require,module,exports){
+},{}],425:[function(require,module,exports){
 var fr_CA = {};
 module['exports'] = fr_CA;
 fr_CA.title = "Canada (French)";
@@ -28142,7 +35614,7 @@ fr_CA.address = require("./address");
 fr_CA.internet = require("./internet");
 fr_CA.phone_number = require("./phone_number");
 
-},{"./address":431,"./internet":438,"./phone_number":440}],436:[function(require,module,exports){
+},{"./address":421,"./internet":428,"./phone_number":430}],426:[function(require,module,exports){
 module["exports"] = [
   "qc.ca",
   "ca",
@@ -28154,27 +35626,27 @@ module["exports"] = [
   "org"
 ];
 
-},{}],437:[function(require,module,exports){
-arguments[4][230][0].apply(exports,arguments)
-},{"dup":230}],438:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":436,"./free_email":437,"dup":64}],439:[function(require,module,exports){
+},{}],427:[function(require,module,exports){
+arguments[4][219][0].apply(exports,arguments)
+},{"dup":219}],428:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":426,"./free_email":427,"dup":45}],429:[function(require,module,exports){
 module["exports"] = [
   "### ###-####",
   "1 ### ###-####",
   "### ###-####, poste ###"
 ];
 
-},{}],440:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":439,"dup":74}],441:[function(require,module,exports){
+},{}],430:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":429,"dup":55}],431:[function(require,module,exports){
 module["exports"] = [
   "###",
   "##",
   "#"
 ];
 
-},{}],442:[function(require,module,exports){
+},{}],432:[function(require,module,exports){
 module["exports"] = [
   "#{city_prefix} #{Name.first_name}#{city_suffix}",
   "#{city_prefix} #{Name.first_name}",
@@ -28184,7 +35656,7 @@ module["exports"] = [
   "#{Name.last_name}#{city_suffix}"
 ];
 
-},{}],443:[function(require,module,exports){
+},{}],433:[function(require,module,exports){
 module["exports"] = [
   "აბასთუმანი",
   "აბაშა",
@@ -28276,7 +35748,7 @@ module["exports"] = [
   "ხულო"
 ];
 
-},{}],444:[function(require,module,exports){
+},{}],434:[function(require,module,exports){
 module["exports"] = [
   "ახალი",
   "ძველი",
@@ -28284,7 +35756,7 @@ module["exports"] = [
   "ქვემო"
 ];
 
-},{}],445:[function(require,module,exports){
+},{}],435:[function(require,module,exports){
 module["exports"] = [
   "სოფელი",
   "ძირი",
@@ -28292,7 +35764,7 @@ module["exports"] = [
   "დაბა"
 ];
 
-},{}],446:[function(require,module,exports){
+},{}],436:[function(require,module,exports){
 module["exports"] = [
   "ავსტრალია",
   "ავსტრია",
@@ -28609,12 +36081,12 @@ module["exports"] = [
   "ჰონკონგი"
 ];
 
-},{}],447:[function(require,module,exports){
+},{}],437:[function(require,module,exports){
 module["exports"] = [
   "საქართველო"
 ];
 
-},{}],448:[function(require,module,exports){
+},{}],438:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -28631,25 +36103,25 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":441,"./city":442,"./city_name":443,"./city_prefix":444,"./city_suffix":445,"./country":446,"./default_country":447,"./postcode":449,"./secondary_address":450,"./street_address":451,"./street_name":452,"./street_suffix":453,"./street_title":454}],449:[function(require,module,exports){
+},{"./building_number":431,"./city":432,"./city_name":433,"./city_prefix":434,"./city_suffix":435,"./country":436,"./default_country":437,"./postcode":439,"./secondary_address":440,"./street_address":441,"./street_name":442,"./street_suffix":443,"./street_title":444}],439:[function(require,module,exports){
 module["exports"] = [
   "01##"
 ];
 
-},{}],450:[function(require,module,exports){
+},{}],440:[function(require,module,exports){
 module["exports"] = [
   "კორპ. ##",
   "შენობა ###"
 ];
 
-},{}],451:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],452:[function(require,module,exports){
+},{}],441:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],442:[function(require,module,exports){
 module["exports"] = [
   "#{street_title} #{street_suffix}"
 ];
 
-},{}],453:[function(require,module,exports){
+},{}],443:[function(require,module,exports){
 module["exports"] = [
   "გამზ.",
   "გამზირი",
@@ -28659,7 +36131,7 @@ module["exports"] = [
   "ხეივანი"
 ];
 
-},{}],454:[function(require,module,exports){
+},{}],444:[function(require,module,exports){
 module["exports"] = [
   "აბაშიძის",
   "აბესაძის",
@@ -29079,7 +36551,7 @@ module["exports"] = [
   "ჯორჯიაშვილის"
 ];
 
-},{}],455:[function(require,module,exports){
+},{}],445:[function(require,module,exports){
 module["exports"] = [
   "(+995 32) 2-##-##-##",
   "032-2-##-##-##",
@@ -29092,16 +36564,16 @@ module["exports"] = [
   "2 ### ###"
 ];
 
-},{}],456:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":455,"dup":56}],457:[function(require,module,exports){
+},{}],446:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":445,"dup":37}],447:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.prefix = require("./prefix");
 company.suffix = require("./suffix");
 company.name = require("./name");
 
-},{"./name":458,"./prefix":459,"./suffix":460}],458:[function(require,module,exports){
+},{"./name":448,"./prefix":449,"./suffix":450}],448:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{Name.first_name}",
   "#{prefix} #{Name.last_name}",
@@ -29110,7 +36582,7 @@ module["exports"] = [
   "#{prefix} #{Name.last_name}-#{Name.last_name}"
 ];
 
-},{}],459:[function(require,module,exports){
+},{}],449:[function(require,module,exports){
 module["exports"] = [
   "შპს",
   "სს",
@@ -29118,7 +36590,7 @@ module["exports"] = [
   "სსიპ"
 ];
 
-},{}],460:[function(require,module,exports){
+},{}],450:[function(require,module,exports){
 module["exports"] = [
   "ჯგუფი",
   "და კომპანია",
@@ -29126,7 +36598,7 @@ module["exports"] = [
   "გრუპი"
 ];
 
-},{}],461:[function(require,module,exports){
+},{}],451:[function(require,module,exports){
 var ge = {};
 module['exports'] = ge;
 ge.title = "Georgian";
@@ -29138,7 +36610,7 @@ ge.company = require("./company");
 ge.phone_number = require("./phone_number");
 ge.cell_phone = require("./cell_phone");
 
-},{"./address":448,"./cell_phone":456,"./company":457,"./internet":464,"./name":466,"./phone_number":472}],462:[function(require,module,exports){
+},{"./address":438,"./cell_phone":446,"./company":447,"./internet":454,"./name":456,"./phone_number":462}],452:[function(require,module,exports){
 module["exports"] = [
   "ge",
   "com",
@@ -29148,16 +36620,16 @@ module["exports"] = [
   "org.ge"
 ];
 
-},{}],463:[function(require,module,exports){
+},{}],453:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.com",
   "posta.ge"
 ];
 
-},{}],464:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":462,"./free_email":463,"dup":64}],465:[function(require,module,exports){
+},{}],454:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":452,"./free_email":453,"dup":45}],455:[function(require,module,exports){
 module["exports"] = [
   "აგული",
   "აგუნა",
@@ -29660,9 +37132,9 @@ module["exports"] = [
   "ჰამლეტ"
 ];
 
-},{}],466:[function(require,module,exports){
-arguments[4][423][0].apply(exports,arguments)
-},{"./first_name":465,"./last_name":467,"./name":468,"./prefix":469,"./title":470,"dup":423}],467:[function(require,module,exports){
+},{}],456:[function(require,module,exports){
+arguments[4][413][0].apply(exports,arguments)
+},{"./first_name":455,"./last_name":457,"./name":458,"./prefix":459,"./title":460,"dup":413}],457:[function(require,module,exports){
 module["exports"] = [
   "აბაზაძე",
   "აბაშიძე",
@@ -29835,7 +37307,7 @@ module["exports"] = [
   "ჯუღაშვილი"
 ];
 
-},{}],468:[function(require,module,exports){
+},{}],458:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name}",
   "#{first_name} #{last_name}",
@@ -29845,7 +37317,7 @@ module["exports"] = [
   "#{first_name} #{last_name}"
 ];
 
-},{}],469:[function(require,module,exports){
+},{}],459:[function(require,module,exports){
 module["exports"] = [
   "ბ-ნი",
   "ბატონი",
@@ -29853,7 +37325,7 @@ module["exports"] = [
   "ქალბატონი"
 ];
 
-},{}],470:[function(require,module,exports){
+},{}],460:[function(require,module,exports){
 module["exports"] = {
   "descriptor": [
     "გენერალური",
@@ -29931,7 +37403,7 @@ module["exports"] = {
   ]
 };
 
-},{}],471:[function(require,module,exports){
+},{}],461:[function(require,module,exports){
 module["exports"] = [
   "5##-###-###",
   "5########",
@@ -29955,11 +37427,1487 @@ module["exports"] = [
   "(+995) 5## ### ###"
 ];
 
+},{}],462:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":461,"dup":55}],463:[function(require,module,exports){
+module["exports"] = [  
+  "##",
+  "#"
+];
+
+},{}],464:[function(require,module,exports){
+arguments[4][57][0].apply(exports,arguments)
+},{"dup":57}],465:[function(require,module,exports){
+module["exports"] = [
+  "Airmadidi",
+  "Ampana",
+  "Amurang",
+  "Andolo",
+  "Banggai",
+  "Bantaeng",
+  "Barru",
+  "Bau-Bau",
+  "Benteng",
+  "Bitung",
+  "Bolaang Uki",
+  "Boroko",
+  "Bulukumba",
+  "Bungku",
+  "Buol",
+  "Buranga",
+  "Donggala",
+  "Enrekang",
+  "Gorontalo",
+  "Jeneponto",
+  "Kawangkoan",
+  "Kendari",
+  "Kolaka",
+  "Kotamobagu",
+  "Kota Raha",
+  "Kwandang",
+  "Lasusua",
+  "Luwuk",
+  "Majene",
+  "Makale",
+  "Makassar",
+  "Malili",
+  "Mamasa",
+  "Mamuju",
+  "Manado",
+  "Marisa",
+  "Maros",
+  "Masamba",
+  "Melonguane",
+  "Ondong Siau",
+  "Palopo",
+  "Palu",
+  "Pangkajene",
+  "Pare-Pare",
+  "Parigi",
+  "Pasangkayu",
+  "Pinrang",
+  "Polewali",
+  "Poso",
+  "Rantepao",
+  "Ratahan",
+  "Rumbia",
+  "Sengkang",
+  "Sidenreng",
+  "Sigi Biromaru",
+  "Sinjai",
+  "Sunggu Minasa",
+  "Suwawa",
+  "Tahuna",
+  "Takalar",
+  "Tilamuta",
+  "Toli Toli",
+  "Tomohon",
+  "Tondano",
+  "Tutuyan",
+  "Unaaha",
+  "Wangi Wangi",
+  "Wanggudu",
+  "Watampone",
+  "Watan Soppeng",
+  "Ambarawa",
+  "Anyer",
+  "Bandung",
+  "Bangil",
+  "Banjar (Jawa Barat)",
+  "Banjarnegara",
+  "Bangkalan",
+  "Bantul",
+  "Banyumas",
+  "Banyuwangi",
+  "Batang",
+  "Batu",
+  "Bekasi",
+  "Blitar",
+  "Blora",
+  "Bogor",
+  "Bojonegoro",
+  "Bondowoso",
+  "Boyolali",
+  "Bumiayu",
+  "Brebes",
+  "Caruban",
+  "Cianjur",
+  "Ciamis",
+  "Cibinong",
+  "Cikampek",
+  "Cikarang",
+  "Cilacap",
+  "Cilegon",
+  "Cirebon",
+  "Demak",
+  "Depok",
+  "Garut",
+  "Gresik",
+  "Indramayu",
+  "Jakarta",
+  "Jember",
+  "Jepara",
+  "Jombang",
+  "Kajen",
+  "Karanganyar",
+  "Kebumen",
+  "Kediri",
+  "Kendal",
+  "Kepanjen",
+  "Klaten",
+  "Pelabuhan Ratu",
+  "Kraksaan",
+  "Kudus",
+  "Kuningan",
+  "Lamongan",
+  "Lumajang",
+  "Madiun",
+  "Magelang",
+  "Magetan",
+  "Majalengka",
+  "Malang",
+  "Mojokerto",
+  "Mojosari",
+  "Mungkid",
+  "Ngamprah",
+  "Nganjuk",
+  "Ngawi",
+  "Pacitan",
+  "Pamekasan",
+  "Pandeglang",
+  "Pare",
+  "Pati",
+  "Pasuruan",
+  "Pekalongan",
+  "Pemalang",
+  "Ponorogo",
+  "Probolinggo",
+  "Purbalingga",
+  "Purwakarta",
+  "Purwodadi",
+  "Purwokerto",
+  "Purworejo",
+  "Rangkasbitung",
+  "Rembang",
+  "Salatiga",
+  "Sampang",
+  "Semarang",
+  "Serang",
+  "Sidayu",
+  "Sidoarjo",
+  "Singaparna",
+  "Situbondo",
+  "Slawi",
+  "Sleman",
+  "Soreang",
+  "Sragen",
+  "Subang",
+  "Sukabumi",
+  "Sukoharjo",
+  "Sumber",
+  "Sumedang",
+  "Sumenep",
+  "Surabaya",
+  "Surakarta",
+  "Tasikmalaya",
+  "Tangerang",
+  "Tangerang Selatan",
+  "Tegal",
+  "Temanggung",
+  "Tigaraksa",
+  "Trenggalek",
+  "Tuban",
+  "Tulungagung",
+  "Ungaran",
+  "Wates",
+  "Wlingi",
+  "Wonogiri",
+  "Wonosari",
+  "Wonosobo",
+  "Yogyakarta",
+  "Atambua",
+  "Baa",
+  "Badung",
+  "Bajawa",
+  "Bangli",
+  "Bima",
+  "Denpasar",
+  "Dompu",
+  "Ende",
+  "Gianyar",
+  "Kalabahi",
+  "Karangasem",
+  "Kefamenanu",
+  "Klungkung",
+  "Kupang",
+  "Labuhan Bajo",
+  "Larantuka",
+  "Lewoleba",
+  "Maumere",
+  "Mataram",
+  "Mbay",
+  "Negara",
+  "Praya",
+  "Raba",
+  "Ruteng",
+  "Selong",
+  "Singaraja",
+  "Soe",
+  "Sumbawa Besar",
+  "Tabanan",
+  "Taliwang",
+  "Tambolaka",
+  "Tanjung",
+  "Waibakul",
+  "Waikabubak",
+  "Waingapu",
+  "Denpasar",
+  "Negara,Bali",
+  "Singaraja",
+  "Tabanan",
+  "Bangli"
+];
+},{}],466:[function(require,module,exports){
+module["exports"] = [
+  "Indonesia"
+];
+
+},{}],467:[function(require,module,exports){
+var address = {};
+module['exports'] = address;
+address.building_number = require("./building_number");
+address.postcode = require("./postcode");
+address.state = require("./state");
+address.city_name = require("./city_name");
+address.city = require("./city");
+address.street_prefix = require("./street_prefix");
+address.street_name = require("./street_name");
+address.street_address = require("./street_address");
+address.default_country = require("./default_country");
+
+},{"./building_number":463,"./city":464,"./city_name":465,"./default_country":466,"./postcode":468,"./state":469,"./street_address":470,"./street_name":471,"./street_prefix":472}],468:[function(require,module,exports){
+module["exports"] = [
+  "#####"
+];
+},{}],469:[function(require,module,exports){
+module["exports"] = [
+  "Aceh",
+  "Sumatera Utara",
+  "Sumatera Barat",
+  "Jambi",
+  "Bangka Belitung",
+  "Riau",
+  "Kepulauan Riau",
+  "Bengkulu",
+  "Sumatera Selatan",
+  "Lampung",
+  "Banten",
+  "DKI Jakarta",
+  "Jawa Barat",
+  "Jawa Tengah",
+  "Jawa Timur",
+  "Nusa Tenggara Timur",
+  "DI Yogyakarta",
+  "Bali",
+  "Nusa Tenggara Barat",
+  "Kalimantan Barat",
+  "Kalimantan Tengah",
+  "Kalimantan Selatan",
+  "Kalimantan Timur",
+  "Kalimantan Utara",
+  "Sulawesi Selatan",
+  "Sulawesi Utara",
+  "Gorontalo",
+  "Sulawesi Tengah",
+  "Sulawesi Barat",
+  "Sulawesi Tenggara",
+  "Maluku",
+  "Maluku Utara",
+  "Papua Barat",
+  "Papua"
+];
+},{}],470:[function(require,module,exports){
+module["exports"] = [
+  "#{street_name} no #{building_number}"
+];
+},{}],471:[function(require,module,exports){
+module["exports"] = [
+  "#{street_prefix} #{Name.first_name}",
+  "#{street_prefix} #{Name.last_name}"
+];
 },{}],472:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":471,"dup":74}],473:[function(require,module,exports){
-arguments[4][441][0].apply(exports,arguments)
-},{"dup":441}],474:[function(require,module,exports){
+module["exports"] = [
+  "Ds.",
+  "Dk.",
+  "Gg.",
+  "Jln.",
+  "Jr.",
+  "Kpg.",
+  "Ki.",
+  "Psr."
+];
+},{}],473:[function(require,module,exports){
+arguments[4][447][0].apply(exports,arguments)
+},{"./name":474,"./prefix":475,"./suffix":476,"dup":447}],474:[function(require,module,exports){
+module["exports"] = [
+  "#{prefix} #{Name.last_name}",
+  "#{Name.last_name} #{suffix}",
+  "#{prefix} #{Name.last_name} #{suffix}"
+];
+
+},{}],475:[function(require,module,exports){
+module["exports"] = [
+  "PT",
+  "CV",
+  "UD",
+  "PD",
+  "Perum"
+];
+},{}],476:[function(require,module,exports){
+module["exports"] = [
+  "(Persero) Tbk",
+  "Tbk"
+];
+},{}],477:[function(require,module,exports){
+arguments[4][156][0].apply(exports,arguments)
+},{"./month":478,"./weekday":479,"dup":156}],478:[function(require,module,exports){
+module["exports"] = {
+  wide: [
+    "Januari",
+    "Februari",
+    "Maret",
+    "April",
+    "Mei",
+    "Juni",
+    "Juli",
+    "Agustus",
+    "September",
+    "Oktober",
+    "November",
+    "Desember"
+  ],
+  wide_context: [
+    "Januari",
+    "Februari",
+    "Maret",
+    "April",
+    "Mei",
+    "Juni",
+    "Juli",
+    "Agustus",
+    "September",
+    "Oktober",
+    "November",
+    "Desember"
+  ],
+  abbr: [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "Mei",
+    "Jun",
+    "Jul",
+    "Ags",
+    "Sep",
+    "Okt",
+    "Nov",
+    "Des"
+  ],
+  abbr_context: [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "Mei",
+    "Jun",
+    "Jul",
+    "Ags",
+    "Sep",
+    "Okt",
+    "Nov",
+    "Des"
+  ]
+};
+
+},{}],479:[function(require,module,exports){
+module["exports"] = {
+  wide: [
+    "Minggu",
+    "Senin",
+    "Selasa",
+    "Rabu",
+    "Kamis",
+    "Jumat",
+    "Sabtu"
+  ],
+  wide_context: [
+    "Minggu",
+    "Senin",
+    "Selasa",
+    "Rabu",
+    "Kamis",
+    "Jumat",
+    "Sabtu"
+  ],
+  abbr: [
+    "Min",
+    "Sen",
+    "Sel",
+    "Rab",
+    "Kam",
+    "Jum",
+    "Sab"
+  ],
+  abbr_context: [
+    "Min",
+    "Sen",
+    "Sel",
+    "Rab",
+    "Kam",
+    "Jum",
+    "Sab"
+  ]
+};
+
+},{}],480:[function(require,module,exports){
+var id = {};
+module['exports'] = id;
+id.title = "Indonesia";
+id.address = require("./address");
+id.company = require("./company");
+id.internet = require("./internet");
+id.date = require("./date");
+id.name = require("./name");
+id.phone_number = require("./phone_number");
+
+},{"./address":467,"./company":473,"./date":477,"./internet":483,"./name":486,"./phone_number":493}],481:[function(require,module,exports){
+module["exports"] = [
+  "com",
+  "net",
+  "org",
+  "asia",
+  "tv",
+  "biz",
+  "info",
+  "in",
+  "name",
+  "co",
+  "ac.id",
+  "sch.id",
+  "go.id",
+  "mil.id",
+  "co.id",
+  "or.id",
+  "web.id",
+  "my.id",
+  "biz.id",
+  "desa.id"
+];
+},{}],482:[function(require,module,exports){
+module["exports"] = [
+  'gmail.com',
+  'yahoo.com',
+  'gmail.co.id',
+  'yahoo.co.id'
+];
+},{}],483:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":481,"./free_email":482,"dup":45}],484:[function(require,module,exports){
+module["exports"] = [
+  "Ade",
+  "Agnes",
+  "Ajeng",
+  "Amalia",
+  "Anita",
+  "Ayu",
+  "Aisyah",
+  "Ana",
+  "Ami",
+  "Ani",
+  "Azalea",
+  "Aurora",
+  "Alika",
+  "Anastasia",
+  "Amelia",
+  "Almira",
+  "Bella",
+  "Betania",
+  "Belinda",
+  "Citra",
+  "Cindy",
+  "Chelsea",
+  "Clara",
+  "Cornelia",
+  "Cinta",
+  "Cinthia",
+  "Ciaobella",
+  "Cici",
+  "Carla",
+  "Calista",
+  "Devi",
+  "Dewi","Dian",
+  "Diah",
+  "Diana",
+  "Dina",
+  "Dinda",
+  "Dalima",
+  "Eka",
+  "Eva",
+  "Endah",
+  "Elisa",
+  "Eli",
+  "Ella",
+  "Ellis",
+  "Elma",
+  "Elvina",
+  "Fitria",
+  "Fitriani",
+  "Febi",
+  "Faizah",
+  "Farah",
+  "Farhunnisa",
+  "Fathonah",
+  "Gabriella",
+  "Gasti",
+  "Gawati",
+  "Genta",
+  "Ghaliyati",
+  "Gina",
+  "Gilda",
+  "Halima",
+  "Hesti",
+  "Hilda",
+  "Hafshah",
+  "Hamima",
+  "Hana",
+  "Hani",
+  "Hasna",
+  "Humaira",
+  "Ika",
+  "Indah",
+  "Intan",
+  "Irma",
+  "Icha",
+  "Ida",
+  "Ifa",
+  "Ilsa",
+  "Ina",
+  "Ira",
+  "Iriana",
+  "Jamalia",
+  "Janet",
+  "Jane",
+  "Julia",
+  "Juli",
+  "Jessica",
+  "Jasmin",
+  "Jelita",
+  "Kamaria",
+  "Kamila",
+  "Kani",
+  "Karen",
+  "Karimah",
+  "Kartika",
+  "Kasiyah",
+  "Keisha",
+  "Kezia",
+  "Kiandra",
+  "Kayla",
+  "Kania",
+  "Lala",
+  "Lalita",
+  "Latika",
+  "Laila",
+  "Laras",
+  "Lidya",
+  "Lili",
+  "Lintang",
+  "Maria",
+  "Mala",
+  "Maya",
+  "Maida",
+  "Maimunah",
+  "Melinda",
+  "Mila",
+  "Mutia",
+  "Michelle",
+  "Malika",
+  "Nadia",
+  "Nadine",
+  "Nabila",
+  "Natalia",
+  "Novi",
+  "Nova",
+  "Nurul",
+  "Nilam",
+  "Najwa",
+  "Olivia",
+  "Ophelia",
+  "Oni",
+  "Oliva",
+  "Padma",
+  "Putri",
+  "Paramita",
+  "Paris",
+  "Patricia",
+  "Paulin",
+  "Puput",
+  "Puji",
+  "Pia",
+  "Puspa",
+  "Puti",
+  "Putri",
+  "Padmi",
+  "Qori",
+  "Queen",
+  "Ratih",
+  "Ratna",
+  "Restu",
+  "Rini",
+  "Rika",
+  "Rina",
+  "Rahayu",
+  "Rahmi",
+  "Rachel",
+  "Rahmi",
+  "Raisa",
+  "Raina",
+  "Sarah",
+  "Sari",
+  "Siti",
+  "Siska",
+  "Suci",
+  "Syahrini",
+  "Septi",
+  "Sadina",
+  "Safina",
+  "Sakura",
+  "Salimah",
+  "Salwa",
+  "Salsabila",
+  "Samiah",
+  "Shania",
+  "Sabrina",
+  "Silvia",
+  "Shakila",
+  "Talia",
+  "Tami",
+  "Tira",
+  "Tiara",
+  "Titin",
+  "Tania",
+  "Tina",
+  "Tantri",
+  "Tari",
+  "Titi",
+  "Uchita",
+  "Unjani",
+  "Ulya",
+  "Uli",
+  "Ulva",
+  "Umi",
+  "Usyi",
+  "Vanya",
+  "Vanesa",
+  "Vivi",
+  "Vera",
+  "Vicky",
+  "Victoria",
+  "Violet",
+  "Winda",
+  "Widya",
+  "Wulan",
+  "Wirda",
+  "Wani",
+  "Yani",
+  "Yessi",
+  "Yulia",
+  "Yuliana",
+  "Yuni",
+  "Yunita",
+  "Yance",
+  "Zahra",
+  "Zalindra",
+  "Zaenab",
+  "Zulfa",
+  "Zizi",
+  "Zulaikha",
+  "Zamira",
+  "Zelda",
+  "Zelaya"
+];
+},{}],485:[function(require,module,exports){
+module["exports"] = [
+  "Agustina",
+  "Andriani",
+  "Anggraini",
+  "Aryani",
+  "Astuti",
+  "Fujiati",
+  "Farida",
+  "Handayani",
+  "Hassanah",
+  "Hartati",
+  "Hasanah",
+  "Haryanti",
+  "Hariyah",
+  "Hastuti",
+  "Halimah",
+  "Kusmawati",
+  "Kuswandari",
+  "Laksmiwati",
+  "Laksita",
+  "Lestari",
+  "Lailasari",
+  "Mandasari",
+  "Mardhiyah",
+  "Mayasari",
+  "Melani",
+  "Mulyani",
+  "Maryati",
+  "Nurdiyanti",
+  "Novitasari",
+  "Nuraini",
+  "Nasyidah",
+  "Nasyiah",
+  "Namaga",
+  "Palastri",
+  "Pudjiastuti",
+  "Puspasari",
+  "Puspita",
+  "Purwanti",
+  "Pratiwi",
+  "Purnawati",
+  "Pertiwi",
+  "Permata",
+  "Prastuti",
+  "Padmasari",
+  "Rahmawati",
+  "Rahayu",
+  "Riyanti",
+  "Rahimah",
+  "Suartini",
+  "Sudiati",
+  "Suryatmi",
+  "Susanti",
+  "Safitri",
+  "Oktaviani",
+  "Utami",
+  "Usamah",
+  "Usada",
+  "Uyainah",
+  "Yuniar",
+  "Yuliarti",
+  "Yulianti",
+  "Yolanda",
+  "Wahyuni",
+  "Wijayanti",
+  "Widiastuti",
+  "Winarsih",
+  "Wulandari",
+  "Wastuti",
+  "Zulaika"
+];
+},{}],486:[function(require,module,exports){
+var name = {};
+module['exports'] = name;
+name.male_first_name = require("./male_first_name");
+name.male_last_name = require("./male_last_name");
+name.female_first_name = require("./female_first_name");
+name.female_last_name = require("./female_last_name");
+name.prefix = require("./prefix");
+name.suffix = require("./suffix");
+name.name = require("./name");
+
+},{"./female_first_name":484,"./female_last_name":485,"./male_first_name":487,"./male_last_name":488,"./name":489,"./prefix":490,"./suffix":491}],487:[function(require,module,exports){
+module["exports"] = [
+  "Abyasa",
+  "Ade",
+  "Adhiarja",
+  "Adiarja",
+  "Adika",
+  "Adikara",
+  "Adinata",
+  "Aditya",
+  "Agus",
+  "Ajiman",
+  "Ajimat",
+  "Ajimin",
+  "Ajiono",
+  "Akarsana",
+  "Alambana",
+  "Among",
+  "Anggabaya",
+  "Anom",
+  "Argono",
+  "Aris",
+  "Arta",
+  "Artanto",
+  "Artawan",
+  "Arsipatra",
+  "Asirwada",
+  "Asirwanda",
+  "Aslijan",
+  "Asmadi",
+  "Asman",
+  "Asmianto",
+  "Asmuni",
+  "Aswani",
+  "Atma",
+  "Atmaja",
+  "Bagas",
+  "Bagiya",
+  "Bagus",
+  "Bagya",
+  "Bahuraksa",
+  "Bahuwarna",
+  "Bahuwirya",
+  "Bajragin",
+  "Bakda",
+  "Bakiadi",
+  "Bakianto",
+  "Bakidin",
+  "Bakijan",
+  "Bakiman",
+  "Bakiono",
+  "Bakti",
+  "Baktiadi",
+  "Baktianto",
+  "Baktiono",
+  "Bala",
+  "Balamantri",
+  "Balangga",
+  "Balapati",
+  "Balidin",
+  "Balijan",
+  "Bambang",
+  "Banara",
+  "Banawa",
+  "Banawi",
+  "Bancar",
+  "Budi",
+  "Cagak",
+  "Cager",
+  "Cahyadi",
+  "Cahyanto",
+  "Cahya",
+  "Cahyo",
+  "Cahyono",
+  "Caket",
+  "Cakrabirawa",
+  "Cakrabuana",
+  "Cakrajiya",
+  "Cakrawala",
+  "Cakrawangsa",
+  "Candra",
+  "Chandra",
+  "Candrakanta",
+  "Capa",
+  "Caraka",
+  "Carub",
+  "Catur",
+  "Caturangga",
+  "Cawisadi",
+  "Cawisono",
+  "Cawuk",
+  "Cayadi",
+  "Cecep",
+  "Cemani",
+  "Cemeti",
+  "Cemplunk",
+  "Cengkal",
+  "Cengkir",
+  "Dacin",
+  "Dadap",
+  "Dadi",
+  "Dagel",
+  "Daliman",
+  "Dalimin",
+  "Daliono",
+  "Damar",
+  "Damu",
+  "Danang",
+  "Daniswara",
+  "Danu",
+  "Danuja",
+  "Dariati",
+  "Darijan",
+  "Darimin",
+  "Darmaji",
+  "Darman",
+  "Darmana",
+  "Darmanto",
+  "Darsirah",
+  "Dartono",
+  "Daru",
+  "Daruna",
+  "Daryani",
+  "Dasa",
+  "Digdaya",
+  "Dimas",
+  "Dimaz",
+  "Dipa",
+  "Dirja",
+  "Drajat",
+  "Dwi",
+  "Dono",
+  "Dodo",
+  "Edi",
+  "Eka",
+  "Elon",
+  "Eluh",
+  "Eman",
+  "Emas",
+  "Embuh",
+  "Emong",
+  "Empluk",
+  "Endra",
+  "Enteng",
+  "Estiawan",
+  "Estiono",
+  "Eko",
+  "Edi",
+  "Edison",
+  "Edward",
+  "Elvin",
+  "Erik",
+  "Emil",
+  "Ega",
+  "Emin",
+  "Eja",
+  "Gada",
+  "Gadang",
+  "Gaduh",
+  "Gaiman",
+  "Galak",
+  "Galang",
+  "Galar",
+  "Galih",
+  "Galiono",
+  "Galuh",
+  "Galur",
+  "Gaman",
+  "Gamani",
+  "Gamanto",
+  "Gambira",
+  "Gamblang",
+  "Ganda",
+  "Gandewa",
+  "Gandi",
+  "Gandi",
+  "Ganep",
+  "Gangsa",
+  "Gangsar",
+  "Ganjaran",
+  "Gantar",
+  "Gara",
+  "Garan",
+  "Garang",
+  "Garda",
+  "Gatot",
+  "Gatra",
+  "Gilang",
+  "Galih",
+  "Ghani",
+  "Gading",
+  "Hairyanto",
+  "Hardana",
+  "Hardi",
+  "Harimurti",
+  "Harja",
+  "Harjasa",
+  "Harjaya",
+  "Harjo",
+  "Harsana",
+  "Harsanto",
+  "Harsaya",
+  "Hartaka",
+  "Hartana",
+  "Harto",
+  "Hasta",
+  "Heru",
+  "Himawan",
+  "Hadi",
+  "Halim",
+  "Hasim",
+  "Hasan",
+  "Hendra",
+  "Hendri",
+  "Heryanto",
+  "Hamzah",
+  "Hari",
+  "Imam",
+  "Indra",
+  "Irwan",
+  "Irsad",
+  "Ikhsan",
+  "Irfan",
+  "Ian",
+  "Ibrahim",
+  "Ibrani",
+  "Ismail",
+  "Irnanto",
+  "Ilyas",
+  "Ibun",
+  "Ivan",
+  "Ikin",
+  "Ihsan",
+  "Jabal",
+  "Jaeman",
+  "Jaga",
+  "Jagapati",
+  "Jagaraga",
+  "Jail",
+  "Jaiman",
+  "Jaka",
+  "Jarwa",
+  "Jarwadi",
+  "Jarwi",
+  "Jasmani",
+  "Jaswadi",
+  "Jati",
+  "Jatmiko",
+  "Jaya",
+  "Jayadi",
+  "Jayeng",
+  "Jinawi",
+  "Jindra",
+  "Joko",
+  "Jumadi",
+  "Jumari",
+  "Jamal",
+  "Jamil",
+  "Jais",
+  "Jefri",
+  "Johan",
+  "Jono",
+  "Kacung",
+  "Kajen",
+  "Kambali",
+  "Kamidin",
+  "Kariman",
+  "Karja",
+  "Karma",
+  "Karman",
+  "Karna",
+  "Karsa",
+  "Karsana",
+  "Karta",
+  "Kasiran",
+  "Kasusra",
+  "Kawaca",
+  "Kawaya",
+  "Kayun",
+  "Kemba",
+  "Kenari",
+  "Kenes",
+  "Kuncara",
+  "Kunthara",
+  "Kusuma",
+  "Kadir",
+  "Kala",
+  "Kalim",
+  "Kurnia",
+  "Kanda",
+  "Kardi",
+  "Karya",
+  "Kasim",
+  "Kairav",
+  "Kenzie",
+  "Kemal",
+  "Kamal",
+  "Koko",
+  "Labuh",
+  "Laksana",
+  "Lamar",
+  "Lanang",
+  "Langgeng",
+  "Lanjar",
+  "Lantar",
+  "Lega",
+  "Legawa",
+  "Lembah",
+  "Liman",
+  "Limar",
+  "Luhung",
+  "Lukita",
+  "Luluh",
+  "Lulut",
+  "Lurhur",
+  "Luwar",
+  "Luwes",
+  "Latif",
+  "Lasmanto",
+  "Lukman",
+  "Luthfi",
+  "Leo",
+  "Luis",
+  "Lutfan",
+  "Lasmono",
+  "Laswi",
+  "Mahesa",
+  "Makara",
+  "Makuta",
+  "Manah",
+  "Maras",
+  "Margana",
+  "Mariadi",
+  "Marsudi",
+  "Martaka",
+  "Martana",
+  "Martani",
+  "Marwata",
+  "Maryadi",
+  "Maryanto",
+  "Mitra",
+  "Mujur",
+  "Mulya",
+  "Mulyanto",
+  "Mulyono",
+  "Mumpuni",
+  "Muni",
+  "Mursita",
+  "Murti",
+  "Mustika",
+  "Maman",
+  "Mahmud",
+  "Mahdi",
+  "Mahfud",
+  "Malik",
+  "Muhammad",
+  "Mustofa",
+  "Marsito",
+  "Mursinin",
+  "Nalar",
+  "Naradi",
+  "Nardi",
+  "Niyaga",
+  "Nrima",
+  "Nugraha",
+  "Nyana",
+  "Narji",
+  "Nasab",
+  "Nasrullah",
+  "Nasim",
+  "Najib",
+  "Najam",
+  "Nyoman",
+  "Olga",
+  "Ozy",
+  "Omar",
+  "Opan",
+  "Oskar",
+  "Oman",
+  "Okto",
+  "Okta",
+  "Opung",
+  "Paiman",
+  "Panca",
+  "Pangeran",
+  "Pangestu",
+  "Pardi",
+  "Parman",
+  "Perkasa",
+  "Praba",
+  "Prabu",
+  "Prabawa",
+  "Prabowo",
+  "Prakosa",
+  "Pranata",
+  "Pranawa",
+  "Prasetya",
+  "Prasetyo",
+  "Prayitna",
+  "Prayoga",
+  "Prayogo",
+  "Purwadi",
+  "Purwa",
+  "Purwanto",
+  "Panji",
+  "Pandu",
+  "Paiman",
+  "Prima",
+  "Putu",
+  "Raden",
+  "Raditya",
+  "Raharja",
+  "Rama",
+  "Rangga",
+  "Reksa",
+  "Respati",
+  "Rusman",
+  "Rosman",
+  "Rahmat",
+  "Rahman",
+  "Rendy",
+  "Reza",
+  "Rizki",
+  "Ridwan",
+  "Rudi",
+  "Raden",
+  "Radit",
+  "Radika",
+  "Rafi",
+  "Rafid",
+  "Raihan",
+  "Salman",
+  "Saadat",
+  "Saiful",
+  "Surya",
+  "Slamet",
+  "Samsul",
+  "Soleh",
+  "Simon",
+  "Sabar",
+  "Sabri",
+  "Sidiq",
+  "Satya",
+  "Setya",
+  "Saka",
+  "Sakti",
+  "Taswir",
+  "Tedi",
+  "Teddy",
+  "Taufan",
+  "Taufik",
+  "Tomi",
+  "Tasnim",
+  "Teguh",
+  "Tasdik",
+  "Timbul",
+  "Tirta",
+  "Tirtayasa",
+  "Tri",
+  "Tugiman",
+  "Umar",
+  "Usman",
+  "Uda",
+  "Umay",
+  "Unggul",
+  "Utama",
+  "Umaya",
+  "Upik",
+  "Viktor",
+  "Vino",
+  "Vinsen",
+  "Vero",
+  "Vega",
+  "Viman",
+  "Virman",
+  "Wahyu",
+  "Wira",
+  "Wisnu",
+  "Wadi",
+  "Wardi",
+  "Warji",
+  "Waluyo",
+  "Wakiman",
+  "Wage",
+  "Wardaya",
+  "Warsa",
+  "Warsita",
+  "Warta",
+  "Wasis",
+  "Wawan",
+  "Xanana",
+  "Yahya",
+  "Yusuf",
+  "Yosef",
+  "Yono",
+  "Yoga"
+];
+},{}],488:[function(require,module,exports){
+module["exports"] = [
+  "Adriansyah",
+  "Ardianto",
+  "Anggriawan",
+  "Budiman",
+  "Budiyanto",
+  "Damanik",
+  "Dongoran",
+  "Dabukke",
+  "Firmansyah",
+  "Firgantoro",
+  "Gunarto",
+  "Gunawan",
+  "Hardiansyah",
+  "Habibi",
+  "Hakim",
+  "Halim",
+  "Haryanto",
+  "Hidayat",
+  "Hidayanto",
+  "Hutagalung",
+  "Hutapea",
+  "Hutasoit",
+  "Irawan",
+  "Iswahyudi",
+  "Kuswoyo",
+  "Januar",
+  "Jailani",
+  "Kurniawan",
+  "Kusumo",
+  "Latupono",
+  "Lazuardi",
+  "Maheswara",
+  "Mahendra",
+  "Mustofa",
+  "Mansur",
+  "Mandala",
+  "Megantara",
+  "Maulana",
+  "Maryadi",
+  "Mangunsong",
+  "Manullang",
+  "Marpaung",
+  "Marbun",
+  "Narpati",
+  "Natsir",
+  "Nugroho",
+  "Najmudin",
+  "Nashiruddin",
+  "Nainggolan",
+  "Nababan",
+  "Napitupulu",
+  "Pangestu",
+  "Putra",
+  "Pranowo",
+  "Prabowo",
+  "Pratama",
+  "Prasetya",
+  "Prasetyo",
+  "Pradana",
+  "Pradipta",
+  "Prakasa",
+  "Permadi",
+  "Prasasta",
+  "Prayoga",
+  "Ramadan",
+  "Rajasa",
+  "Rajata",
+  "Saptono",
+  "Santoso",
+  "Saputra",
+  "Saefullah",
+  "Setiawan",
+  "Suryono",
+  "Suwarno",
+  "Siregar",
+  "Sihombing",
+  "Salahudin",
+  "Sihombing",
+  "Samosir",
+  "Saragih",
+  "Sihotang",
+  "Simanjuntak",
+  "Sinaga",
+  "Simbolon",
+  "Sitompul",
+  "Sitorus",
+  "Sirait",
+  "Siregar",
+  "Situmorang",
+  "Tampubolon",
+  "Thamrin",
+  "Tamba",
+  "Tarihoran",
+  "Utama",
+  "Uwais",
+  "Wahyudin",
+  "Waluyo",
+  "Wibowo",
+  "Winarno",
+  "Wibisono",
+  "Wijaya",
+  "Widodo",
+  "Wacana",
+  "Waskita",
+  "Wasita",
+  "Zulkarnain"
+];
+},{}],489:[function(require,module,exports){
+module["exports"] = [
+  "#{male_first_name} #{male_last_name}",
+  "#{male_last_name} #{male_first_name}",
+  "#{male_first_name} #{male_first_name} #{male_last_name}",
+  "#{female_first_name} #{female_last_name}",
+  "#{female_first_name} #{male_last_name}",
+  "#{female_last_name} #{female_first_name}",
+  "#{female_first_name} #{female_first_name} #{female_last_name}"
+];
+
+},{}],490:[function(require,module,exports){
+module["exports"] = [];
+},{}],491:[function(require,module,exports){
+module["exports"] = [
+  "S.Ked",
+  "S.Gz",
+  "S.Pt",
+  "S.IP",
+  "S.E.I",
+  "S.E.",
+  "S.Kom",
+  "S.H.",
+  "S.T.",
+  "S.Pd",
+  "S.Psi",
+  "S.I.Kom",
+  "S.Sos",
+  "S.Farm",
+  "M.M.",
+  "M.Kom.",
+  "M.TI.",
+  "M.Pd",
+  "M.Farm",
+  "M.Ak"
+];
+},{}],492:[function(require,module,exports){
+module["exports"] = [
+  "02# #### ###",
+  "02## #### ###",
+  "03## #### ###",
+  "04## #### ###",
+  "05## #### ###",
+  "06## #### ###",
+  "07## #### ###",
+  "09## #### ###",
+  "02# #### ####",
+  "02## #### ####",
+  "03## #### ####",
+  "04## #### ####",
+  "05## #### ####",
+  "06## #### ####",
+  "07## #### ####",
+  "09## #### ####",
+  "08## ### ###",
+  "08## #### ###",
+  "08## #### ####",
+  "(+62) 8## ### ###",
+  "(+62) 2# #### ###",
+  "(+62) 2## #### ###",
+  "(+62) 3## #### ###",
+  "(+62) 4## #### ###",
+  "(+62) 5## #### ###",
+  "(+62) 6## #### ###",
+  "(+62) 7## #### ###",
+  "(+62) 8## #### ###",
+  "(+62) 9## #### ###",
+  "(+62) 2# #### ####",
+  "(+62) 2## #### ####",
+  "(+62) 3## #### ####",
+  "(+62) 4## #### ####",
+  "(+62) 5## #### ####",
+  "(+62) 6## #### ####",
+  "(+62) 7## #### ####",
+  "(+62) 8## #### ####",
+  "(+62) 9## #### ####"
+];
+},{}],493:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":492,"dup":55}],494:[function(require,module,exports){
+arguments[4][431][0].apply(exports,arguments)
+},{"dup":431}],495:[function(require,module,exports){
 module["exports"] = [
   "#{city_prefix} #{Name.first_name} #{city_suffix}",
   "#{city_prefix} #{Name.first_name}",
@@ -29967,7 +38915,7 @@ module["exports"] = [
   "#{Name.last_name} #{city_suffix}"
 ];
 
-},{}],475:[function(require,module,exports){
+},{}],496:[function(require,module,exports){
 module["exports"] = [
   "San",
   "Borgo",
@@ -29976,7 +38924,7 @@ module["exports"] = [
   "Settimo"
 ];
 
-},{}],476:[function(require,module,exports){
+},{}],497:[function(require,module,exports){
 module["exports"] = [
   "a mare",
   "lido",
@@ -29992,7 +38940,7 @@ module["exports"] = [
   "sardo"
 ];
 
-},{}],477:[function(require,module,exports){
+},{}],498:[function(require,module,exports){
 module["exports"] = [
   "Afghanistan",
   "Albania",
@@ -30237,12 +39185,12 @@ module["exports"] = [
   "Zimbabwe"
 ];
 
-},{}],478:[function(require,module,exports){
+},{}],499:[function(require,module,exports){
 module["exports"] = [
   "Italia"
 ];
 
-},{}],479:[function(require,module,exports){
+},{}],500:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -30259,15 +39207,15 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":473,"./city":474,"./city_prefix":475,"./city_suffix":476,"./country":477,"./default_country":478,"./postcode":480,"./secondary_address":481,"./state":482,"./state_abbr":483,"./street_address":484,"./street_name":485,"./street_suffix":486}],480:[function(require,module,exports){
-arguments[4][309][0].apply(exports,arguments)
-},{"dup":309}],481:[function(require,module,exports){
+},{"./building_number":494,"./city":495,"./city_prefix":496,"./city_suffix":497,"./country":498,"./default_country":499,"./postcode":501,"./secondary_address":502,"./state":503,"./state_abbr":504,"./street_address":505,"./street_name":506,"./street_suffix":507}],501:[function(require,module,exports){
+arguments[4][299][0].apply(exports,arguments)
+},{"dup":299}],502:[function(require,module,exports){
 module["exports"] = [
   "Appartamento ##",
   "Piano #"
 ];
 
-},{}],482:[function(require,module,exports){
+},{}],503:[function(require,module,exports){
 module["exports"] = [
   "Agrigento",
   "Alessandria",
@@ -30381,7 +39329,7 @@ module["exports"] = [
   "Viterbo"
 ];
 
-},{}],483:[function(require,module,exports){
+},{}],504:[function(require,module,exports){
 module["exports"] = [
   "AG",
   "AL",
@@ -30495,19 +39443,19 @@ module["exports"] = [
   "VT"
 ];
 
-},{}],484:[function(require,module,exports){
+},{}],505:[function(require,module,exports){
 module["exports"] = [
   "#{street_name} #{building_number}",
   "#{street_name} #{building_number}, #{secondary_address}"
 ];
 
-},{}],485:[function(require,module,exports){
+},{}],506:[function(require,module,exports){
 module["exports"] = [
   "#{street_suffix} #{Name.first_name}",
   "#{street_suffix} #{Name.last_name}"
 ];
 
-},{}],486:[function(require,module,exports){
+},{}],507:[function(require,module,exports){
 module["exports"] = [
   "Piazza",
   "Strada",
@@ -30518,7 +39466,7 @@ module["exports"] = [
   "Incrocio"
 ];
 
-},{}],487:[function(require,module,exports){
+},{}],508:[function(require,module,exports){
 module["exports"] = [
   "24 ore",
   "24/7",
@@ -30592,7 +39540,7 @@ module["exports"] = [
   "valore aggiunto"
 ];
 
-},{}],488:[function(require,module,exports){
+},{}],509:[function(require,module,exports){
 module["exports"] = [
   "valore aggiunto",
   "verticalizzate",
@@ -30642,7 +39590,7 @@ module["exports"] = [
   "ricche"
 ];
 
-},{}],489:[function(require,module,exports){
+},{}],510:[function(require,module,exports){
 module["exports"] = [
   "partnerships",
   "comunità",
@@ -30672,7 +39620,7 @@ module["exports"] = [
   "metodologie"
 ];
 
-},{}],490:[function(require,module,exports){
+},{}],511:[function(require,module,exports){
 module["exports"] = [
   "implementate",
   "utilizzo",
@@ -30704,7 +39652,7 @@ module["exports"] = [
   "ricontestualizzate"
 ];
 
-},{}],491:[function(require,module,exports){
+},{}],512:[function(require,module,exports){
 module["exports"] = [
   "adattiva",
   "avanzata",
@@ -30765,7 +39713,7 @@ module["exports"] = [
   "visionaria"
 ];
 
-},{}],492:[function(require,module,exports){
+},{}],513:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
@@ -30777,14 +39725,14 @@ company.bs_verb = require("./bs_verb");
 company.bs_adjective = require("./bs_adjective");
 company.name = require("./name");
 
-},{"./adjective":487,"./bs_adjective":488,"./bs_noun":489,"./bs_verb":490,"./descriptor":491,"./name":493,"./noun":494,"./suffix":495}],493:[function(require,module,exports){
+},{"./adjective":508,"./bs_adjective":509,"./bs_noun":510,"./bs_verb":511,"./descriptor":512,"./name":514,"./noun":515,"./suffix":516}],514:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name}-#{Name.last_name} #{suffix}",
   "#{Name.last_name}, #{Name.last_name} e #{Name.last_name} #{suffix}"
 ];
 
-},{}],494:[function(require,module,exports){
+},{}],515:[function(require,module,exports){
 module["exports"] = [
   "Abilità",
   "Access",
@@ -30877,7 +39825,7 @@ module["exports"] = [
   "Forza lavoro"
 ];
 
-},{}],495:[function(require,module,exports){
+},{}],516:[function(require,module,exports){
 module["exports"] = [
   "SPA",
   "e figli",
@@ -30885,7 +39833,7 @@ module["exports"] = [
   "s.r.l."
 ];
 
-},{}],496:[function(require,module,exports){
+},{}],517:[function(require,module,exports){
 var it = {};
 module['exports'] = it;
 it.title = "Italian";
@@ -30895,7 +39843,7 @@ it.internet = require("./internet");
 it.name = require("./name");
 it.phone_number = require("./phone_number");
 
-},{"./address":479,"./company":492,"./internet":499,"./name":501,"./phone_number":507}],497:[function(require,module,exports){
+},{"./address":500,"./company":513,"./internet":520,"./name":522,"./phone_number":528}],518:[function(require,module,exports){
 module["exports"] = [
   "com",
   "com",
@@ -30907,7 +39855,7 @@ module["exports"] = [
   "it"
 ];
 
-},{}],498:[function(require,module,exports){
+},{}],519:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.com",
@@ -30917,9 +39865,9 @@ module["exports"] = [
   "yahoo.it"
 ];
 
-},{}],499:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":497,"./free_email":498,"dup":64}],500:[function(require,module,exports){
+},{}],520:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":518,"./free_email":519,"dup":45}],521:[function(require,module,exports){
 module["exports"] = [
   "Aaron",
   "Akira",
@@ -31285,7 +40233,7 @@ module["exports"] = [
   "Zelida"
 ];
 
-},{}],501:[function(require,module,exports){
+},{}],522:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -31294,7 +40242,7 @@ name.prefix = require("./prefix");
 name.suffix = require("./suffix");
 name.name = require("./name");
 
-},{"./first_name":500,"./last_name":502,"./name":503,"./prefix":504,"./suffix":505}],502:[function(require,module,exports){
+},{"./first_name":521,"./last_name":523,"./name":524,"./prefix":525,"./suffix":526}],523:[function(require,module,exports){
 module["exports"] = [
   "Amato",
   "Barbieri",
@@ -31398,9 +40346,9 @@ module["exports"] = [
   "Vitali"
 ];
 
-},{}],503:[function(require,module,exports){
-arguments[4][468][0].apply(exports,arguments)
-},{"dup":468}],504:[function(require,module,exports){
+},{}],524:[function(require,module,exports){
+arguments[4][458][0].apply(exports,arguments)
+},{"dup":458}],525:[function(require,module,exports){
 module["exports"] = [
   "Sig.",
   "Dott.",
@@ -31408,10 +40356,10 @@ module["exports"] = [
   "Ing."
 ];
 
-},{}],505:[function(require,module,exports){
+},{}],526:[function(require,module,exports){
 module["exports"] = [];
 
-},{}],506:[function(require,module,exports){
+},{}],527:[function(require,module,exports){
 module["exports"] = [
   "+## ### ## ## ####",
   "+## ## #######",
@@ -31426,9 +40374,9 @@ module["exports"] = [
   "+39 3## ### ###"
 ];
 
-},{}],507:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":506,"dup":74}],508:[function(require,module,exports){
+},{}],528:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":527,"dup":55}],529:[function(require,module,exports){
 module["exports"] = [
   "#{city_prefix}#{Name.first_name}#{city_suffix}",
   "#{Name.first_name}#{city_suffix}",
@@ -31436,7 +40384,7 @@ module["exports"] = [
   "#{Name.last_name}#{city_suffix}"
 ];
 
-},{}],509:[function(require,module,exports){
+},{}],530:[function(require,module,exports){
 module["exports"] = [
   "北",
   "東",
@@ -31447,7 +40395,7 @@ module["exports"] = [
   "港"
 ];
 
-},{}],510:[function(require,module,exports){
+},{}],531:[function(require,module,exports){
 module["exports"] = [
   "市",
   "区",
@@ -31455,7 +40403,7 @@ module["exports"] = [
   "村"
 ];
 
-},{}],511:[function(require,module,exports){
+},{}],532:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.postcode = require("./postcode");
@@ -31466,12 +40414,12 @@ address.city_suffix = require("./city_suffix");
 address.city = require("./city");
 address.street_name = require("./street_name");
 
-},{"./city":508,"./city_prefix":509,"./city_suffix":510,"./postcode":512,"./state":513,"./state_abbr":514,"./street_name":515}],512:[function(require,module,exports){
+},{"./city":529,"./city_prefix":530,"./city_suffix":531,"./postcode":533,"./state":534,"./state_abbr":535,"./street_name":536}],533:[function(require,module,exports){
 module["exports"] = [
   "###-####"
 ];
 
-},{}],513:[function(require,module,exports){
+},{}],534:[function(require,module,exports){
 module["exports"] = [
   "北海道",
   "青森県",
@@ -31522,7 +40470,7 @@ module["exports"] = [
   "沖縄県"
 ];
 
-},{}],514:[function(require,module,exports){
+},{}],535:[function(require,module,exports){
 module["exports"] = [
   "1",
   "2",
@@ -31573,22 +40521,22 @@ module["exports"] = [
   "47"
 ];
 
-},{}],515:[function(require,module,exports){
+},{}],536:[function(require,module,exports){
 module["exports"] = [
   "#{Name.first_name}#{street_suffix}",
   "#{Name.last_name}#{street_suffix}"
 ];
 
-},{}],516:[function(require,module,exports){
+},{}],537:[function(require,module,exports){
 module["exports"] = [
   "090-####-####",
   "080-####-####",
   "070-####-####"
 ];
 
-},{}],517:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":516,"dup":56}],518:[function(require,module,exports){
+},{}],538:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":537,"dup":37}],539:[function(require,module,exports){
 var ja = {};
 module['exports'] = ja;
 ja.title = "Japanese";
@@ -31597,7 +40545,7 @@ ja.phone_number = require("./phone_number");
 ja.cell_phone = require("./cell_phone");
 ja.name = require("./name");
 
-},{"./address":511,"./cell_phone":517,"./name":520,"./phone_number":524}],519:[function(require,module,exports){
+},{"./address":532,"./cell_phone":538,"./name":541,"./phone_number":545}],540:[function(require,module,exports){
 module["exports"] = [
   "大翔",
   "蓮",
@@ -31622,14 +40570,14 @@ module["exports"] = [
   "美咲"
 ];
 
-},{}],520:[function(require,module,exports){
+},{}],541:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.last_name = require("./last_name");
 name.first_name = require("./first_name");
 name.name = require("./name");
 
-},{"./first_name":519,"./last_name":521,"./name":522}],521:[function(require,module,exports){
+},{"./first_name":540,"./last_name":542,"./name":543}],542:[function(require,module,exports){
 module["exports"] = [
   "佐藤",
   "鈴木",
@@ -31653,12 +40601,12 @@ module["exports"] = [
   "清水"
 ];
 
-},{}],522:[function(require,module,exports){
+},{}],543:[function(require,module,exports){
 module["exports"] = [
   "#{last_name} #{first_name}"
 ];
 
-},{}],523:[function(require,module,exports){
+},{}],544:[function(require,module,exports){
 module["exports"] = [
   "0####-#-####",
   "0###-##-####",
@@ -31666,14 +40614,14 @@ module["exports"] = [
   "0#-####-####"
 ];
 
-},{}],524:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":523,"dup":74}],525:[function(require,module,exports){
+},{}],545:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":544,"dup":55}],546:[function(require,module,exports){
 module["exports"] = [
   "#{city_name}#{city_suffix}"
 ];
 
-},{}],526:[function(require,module,exports){
+},{}],547:[function(require,module,exports){
 module["exports"] = [
   "강릉",
   "양양",
@@ -31705,14 +40653,14 @@ module["exports"] = [
   "수성"
 ];
 
-},{}],527:[function(require,module,exports){
+},{}],548:[function(require,module,exports){
 module["exports"] = [
   "구",
   "시",
   "군"
 ];
 
-},{}],528:[function(require,module,exports){
+},{}],549:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.postcode = require("./postcode");
@@ -31725,12 +40673,12 @@ address.street_root = require("./street_root");
 address.street_suffix = require("./street_suffix");
 address.street_name = require("./street_name");
 
-},{"./city":525,"./city_name":526,"./city_suffix":527,"./postcode":529,"./state":530,"./state_abbr":531,"./street_name":532,"./street_root":533,"./street_suffix":534}],529:[function(require,module,exports){
+},{"./city":546,"./city_name":547,"./city_suffix":548,"./postcode":550,"./state":551,"./state_abbr":552,"./street_name":553,"./street_root":554,"./street_suffix":555}],550:[function(require,module,exports){
 module["exports"] = [
   "###-###"
 ];
 
-},{}],530:[function(require,module,exports){
+},{}],551:[function(require,module,exports){
 module["exports"] = [
   "강원",
   "경기",
@@ -31751,14 +40699,14 @@ module["exports"] = [
   "세종"
 ];
 
-},{}],531:[function(require,module,exports){
-arguments[4][530][0].apply(exports,arguments)
-},{"dup":530}],532:[function(require,module,exports){
+},{}],552:[function(require,module,exports){
+arguments[4][551][0].apply(exports,arguments)
+},{"dup":551}],553:[function(require,module,exports){
 module["exports"] = [
   "#{street_root}#{street_suffix}"
 ];
 
-},{}],533:[function(require,module,exports){
+},{}],554:[function(require,module,exports){
 module["exports"] = [
   "상계",
   "화곡",
@@ -31790,33 +40738,33 @@ module["exports"] = [
   "동탄"
 ];
 
-},{}],534:[function(require,module,exports){
+},{}],555:[function(require,module,exports){
 module["exports"] = [
   "읍",
   "면",
   "동"
 ];
 
-},{}],535:[function(require,module,exports){
+},{}],556:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
 company.prefix = require("./prefix");
 company.name = require("./name");
 
-},{"./name":536,"./prefix":537,"./suffix":538}],536:[function(require,module,exports){
+},{"./name":557,"./prefix":558,"./suffix":559}],557:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{Name.first_name}",
   "#{Name.first_name} #{suffix}"
 ];
 
-},{}],537:[function(require,module,exports){
+},{}],558:[function(require,module,exports){
 module["exports"] = [
   "주식회사",
   "한국"
 ];
 
-},{}],538:[function(require,module,exports){
+},{}],559:[function(require,module,exports){
 module["exports"] = [
   "연구소",
   "게임즈",
@@ -31826,7 +40774,7 @@ module["exports"] = [
   "코리아"
 ];
 
-},{}],539:[function(require,module,exports){
+},{}],560:[function(require,module,exports){
 var ko = {};
 module['exports'] = ko;
 ko.title = "Korean";
@@ -31837,7 +40785,7 @@ ko.internet = require("./internet");
 ko.lorem = require("./lorem");
 ko.name = require("./name");
 
-},{"./address":528,"./company":535,"./internet":542,"./lorem":543,"./name":546,"./phone_number":550}],540:[function(require,module,exports){
+},{"./address":549,"./company":556,"./internet":563,"./lorem":564,"./name":567,"./phone_number":571}],561:[function(require,module,exports){
 module["exports"] = [
   "co.kr",
   "com",
@@ -31849,7 +40797,7 @@ module["exports"] = [
   "org"
 ];
 
-},{}],541:[function(require,module,exports){
+},{}],562:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.co.kr",
@@ -31857,11 +40805,11 @@ module["exports"] = [
   "naver.com"
 ];
 
-},{}],542:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":540,"./free_email":541,"dup":64}],543:[function(require,module,exports){
-arguments[4][65][0].apply(exports,arguments)
-},{"./words":544,"dup":65}],544:[function(require,module,exports){
+},{}],563:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":561,"./free_email":562,"dup":45}],564:[function(require,module,exports){
+arguments[4][46][0].apply(exports,arguments)
+},{"./words":565,"dup":46}],565:[function(require,module,exports){
 module["exports"] = [
   "국가는",
   "법률이",
@@ -31993,7 +40941,7 @@ module["exports"] = [
   "가진다."
 ];
 
-},{}],545:[function(require,module,exports){
+},{}],566:[function(require,module,exports){
 module["exports"] = [
   "서연",
   "민서",
@@ -32018,9 +40966,9 @@ module["exports"] = [
   "은주"
 ];
 
-},{}],546:[function(require,module,exports){
-arguments[4][520][0].apply(exports,arguments)
-},{"./first_name":545,"./last_name":547,"./name":548,"dup":520}],547:[function(require,module,exports){
+},{}],567:[function(require,module,exports){
+arguments[4][541][0].apply(exports,arguments)
+},{"./first_name":566,"./last_name":568,"./name":569,"dup":541}],568:[function(require,module,exports){
 module["exports"] = [
   "김",
   "이",
@@ -32044,29 +40992,29 @@ module["exports"] = [
   "홍"
 ];
 
-},{}],548:[function(require,module,exports){
-arguments[4][522][0].apply(exports,arguments)
-},{"dup":522}],549:[function(require,module,exports){
+},{}],569:[function(require,module,exports){
+arguments[4][543][0].apply(exports,arguments)
+},{"dup":543}],570:[function(require,module,exports){
 module["exports"] = [
   "0#-#####-####",
   "0##-###-####",
   "0##-####-####"
 ];
 
-},{}],550:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":549,"dup":74}],551:[function(require,module,exports){
+},{}],571:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":570,"dup":55}],572:[function(require,module,exports){
 module["exports"] = [
   "#",
   "##"
 ];
 
-},{}],552:[function(require,module,exports){
+},{}],573:[function(require,module,exports){
 module["exports"] = [
   "#{city_root}#{city_suffix}"
 ];
 
-},{}],553:[function(require,module,exports){
+},{}],574:[function(require,module,exports){
 module["exports"] = [
   "Fet",
   "Gjes",
@@ -32087,7 +41035,7 @@ module["exports"] = [
   "Vest"
 ];
 
-},{}],554:[function(require,module,exports){
+},{}],575:[function(require,module,exports){
 module["exports"] = [
   "berg",
   "borg",
@@ -32119,7 +41067,7 @@ module["exports"] = [
   "ås"
 ];
 
-},{}],555:[function(require,module,exports){
+},{}],576:[function(require,module,exports){
 module["exports"] = [
   "sgate",
   "svei",
@@ -32129,12 +41077,12 @@ module["exports"] = [
   "veien"
 ];
 
-},{}],556:[function(require,module,exports){
+},{}],577:[function(require,module,exports){
 module["exports"] = [
   "Norge"
 ];
 
-},{}],557:[function(require,module,exports){
+},{}],578:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_root = require("./city_root");
@@ -32152,7 +41100,7 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":551,"./city":552,"./city_root":553,"./city_suffix":554,"./common_street_suffix":555,"./default_country":556,"./postcode":558,"./secondary_address":559,"./state":560,"./street_address":561,"./street_name":562,"./street_prefix":563,"./street_root":564,"./street_suffix":565}],558:[function(require,module,exports){
+},{"./building_number":572,"./city":573,"./city_root":574,"./city_suffix":575,"./common_street_suffix":576,"./default_country":577,"./postcode":579,"./secondary_address":580,"./state":581,"./street_address":582,"./street_name":583,"./street_prefix":584,"./street_root":585,"./street_suffix":586}],579:[function(require,module,exports){
 module["exports"] = [
   "####",
   "####",
@@ -32160,21 +41108,21 @@ module["exports"] = [
   "0###"
 ];
 
-},{}],559:[function(require,module,exports){
+},{}],580:[function(require,module,exports){
 module["exports"] = [
   "Leil. ###",
   "Oppgang A",
   "Oppgang B"
 ];
 
-},{}],560:[function(require,module,exports){
+},{}],581:[function(require,module,exports){
 module["exports"] = [
   ""
 ];
 
-},{}],561:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],562:[function(require,module,exports){
+},{}],582:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],583:[function(require,module,exports){
 module["exports"] = [
   "#{street_root}#{street_suffix}",
   "#{street_prefix} #{street_root}#{street_suffix}",
@@ -32182,7 +41130,7 @@ module["exports"] = [
   "#{Name.last_name}#{common_street_suffix}"
 ];
 
-},{}],563:[function(require,module,exports){
+},{}],584:[function(require,module,exports){
 module["exports"] = [
   "Øvre",
   "Nedre",
@@ -32192,7 +41140,7 @@ module["exports"] = [
   "Vestre"
 ];
 
-},{}],564:[function(require,module,exports){
+},{}],585:[function(require,module,exports){
 module["exports"] = [
   "Eike",
   "Bjørke",
@@ -32229,7 +41177,7 @@ module["exports"] = [
   "Sjø"
 ];
 
-},{}],565:[function(require,module,exports){
+},{}],586:[function(require,module,exports){
 module["exports"] = [
   "alléen",
   "bakken",
@@ -32279,16 +41227,16 @@ module["exports"] = [
   "åsen"
 ];
 
-},{}],566:[function(require,module,exports){
-arguments[4][110][0].apply(exports,arguments)
-},{"./name":567,"./suffix":568,"dup":110}],567:[function(require,module,exports){
+},{}],587:[function(require,module,exports){
+arguments[4][91][0].apply(exports,arguments)
+},{"./name":588,"./suffix":589,"dup":91}],588:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name}-#{Name.last_name}",
   "#{Name.last_name}, #{Name.last_name} og #{Name.last_name}"
 ];
 
-},{}],568:[function(require,module,exports){
+},{}],589:[function(require,module,exports){
 module["exports"] = [
   "Gruppen",
   "AS",
@@ -32298,7 +41246,7 @@ module["exports"] = [
   "og Sønner"
 ];
 
-},{}],569:[function(require,module,exports){
+},{}],590:[function(require,module,exports){
 var nb_NO = {};
 module['exports'] = nb_NO;
 nb_NO.title = "Norwegian";
@@ -32308,7 +41256,7 @@ nb_NO.internet = require("./internet");
 nb_NO.name = require("./name");
 nb_NO.phone_number = require("./phone_number");
 
-},{"./address":557,"./company":566,"./internet":571,"./name":574,"./phone_number":581}],570:[function(require,module,exports){
+},{"./address":578,"./company":587,"./internet":592,"./name":595,"./phone_number":602}],591:[function(require,module,exports){
 module["exports"] = [
   "no",
   "com",
@@ -32316,9 +41264,9 @@ module["exports"] = [
   "org"
 ];
 
-},{}],571:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":570,"dup":115}],572:[function(require,module,exports){
+},{}],592:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":591,"dup":96}],593:[function(require,module,exports){
 module["exports"] = [
   "Emma",
   "Sara",
@@ -32372,7 +41320,7 @@ module["exports"] = [
   "Madeleine"
 ];
 
-},{}],573:[function(require,module,exports){
+},{}],594:[function(require,module,exports){
 module["exports"] = [
   "Emma",
   "Sara",
@@ -32476,7 +41424,7 @@ module["exports"] = [
   "Aksel"
 ];
 
-},{}],574:[function(require,module,exports){
+},{}],595:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -32487,7 +41435,7 @@ name.prefix = require("./prefix");
 name.suffix = require("./suffix");
 name.name = require("./name");
 
-},{"./feminine_name":572,"./first_name":573,"./last_name":575,"./masculine_name":576,"./name":577,"./prefix":578,"./suffix":579}],575:[function(require,module,exports){
+},{"./feminine_name":593,"./first_name":594,"./last_name":596,"./masculine_name":597,"./name":598,"./prefix":599,"./suffix":600}],596:[function(require,module,exports){
 module["exports"] = [
   "Johansen",
   "Hansen",
@@ -32591,7 +41539,7 @@ module["exports"] = [
   "Edvardsen"
 ];
 
-},{}],576:[function(require,module,exports){
+},{}],597:[function(require,module,exports){
 module["exports"] = [
   "Markus",
   "Mathias",
@@ -32645,7 +41593,7 @@ module["exports"] = [
   "Aksel"
 ];
 
-},{}],577:[function(require,module,exports){
+},{}],598:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name}",
   "#{first_name} #{last_name} #{suffix}",
@@ -32655,13 +41603,13 @@ module["exports"] = [
   "#{first_name} #{last_name}"
 ];
 
-},{}],578:[function(require,module,exports){
+},{}],599:[function(require,module,exports){
 module["exports"] = [
   "Dr.",
   "Prof."
 ];
 
-},{}],579:[function(require,module,exports){
+},{}],600:[function(require,module,exports){
 module["exports"] = [
   "Jr.",
   "Sr.",
@@ -32672,7 +41620,7 @@ module["exports"] = [
   "V"
 ];
 
-},{}],580:[function(require,module,exports){
+},{}],601:[function(require,module,exports){
 module["exports"] = [
   "########",
   "## ## ## ##",
@@ -32680,9 +41628,9 @@ module["exports"] = [
   "+47 ## ## ## ##"
 ];
 
-},{}],581:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":580,"dup":74}],582:[function(require,module,exports){
+},{}],602:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":601,"dup":55}],603:[function(require,module,exports){
 module["exports"] = [
   "Bhaktapur",
   "Biratnagar",
@@ -32702,12 +41650,12 @@ module["exports"] = [
   "Pokhara"
 ];
 
-},{}],583:[function(require,module,exports){
+},{}],604:[function(require,module,exports){
 module["exports"] = [
   "Nepal"
 ];
 
-},{}],584:[function(require,module,exports){
+},{}],605:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.postcode = require("./postcode");
@@ -32715,12 +41663,12 @@ address.state = require("./state");
 address.city = require("./city");
 address.default_country = require("./default_country");
 
-},{"./city":582,"./default_country":583,"./postcode":585,"./state":586}],585:[function(require,module,exports){
+},{"./city":603,"./default_country":604,"./postcode":606,"./state":607}],606:[function(require,module,exports){
 module["exports"] = [
   0
 ];
 
-},{}],586:[function(require,module,exports){
+},{}],607:[function(require,module,exports){
 module["exports"] = [
   "Baglung",
   "Banke",
@@ -32777,9 +41725,9 @@ module["exports"] = [
   "Terhathum"
 ];
 
-},{}],587:[function(require,module,exports){
-arguments[4][210][0].apply(exports,arguments)
-},{"./suffix":588,"dup":210}],588:[function(require,module,exports){
+},{}],608:[function(require,module,exports){
+arguments[4][199][0].apply(exports,arguments)
+},{"./suffix":609,"dup":199}],609:[function(require,module,exports){
 module["exports"] = [
   "Pvt Ltd",
   "Group",
@@ -32787,7 +41735,7 @@ module["exports"] = [
   "Limited"
 ];
 
-},{}],589:[function(require,module,exports){
+},{}],610:[function(require,module,exports){
 var nep = {};
 module['exports'] = nep;
 nep.title = "Nepalese";
@@ -32797,7 +41745,7 @@ nep.internet = require("./internet");
 nep.company = require("./company");
 nep.phone_number = require("./phone_number");
 
-},{"./address":584,"./company":587,"./internet":592,"./name":594,"./phone_number":597}],590:[function(require,module,exports){
+},{"./address":605,"./company":608,"./internet":613,"./name":615,"./phone_number":618}],611:[function(require,module,exports){
 module["exports"] = [
   "np",
   "com",
@@ -32806,7 +41754,7 @@ module["exports"] = [
   "org"
 ];
 
-},{}],591:[function(require,module,exports){
+},{}],612:[function(require,module,exports){
 module["exports"] = [
   "worldlink.com.np",
   "gmail.com",
@@ -32814,9 +41762,9 @@ module["exports"] = [
   "hotmail.com"
 ];
 
-},{}],592:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":590,"./free_email":591,"dup":64}],593:[function(require,module,exports){
+},{}],613:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":611,"./free_email":612,"dup":45}],614:[function(require,module,exports){
 module["exports"] = [
   "Aarav",
   "Ajita",
@@ -32875,9 +41823,9 @@ module["exports"] = [
   "Sushant"
 ];
 
-},{}],594:[function(require,module,exports){
-arguments[4][216][0].apply(exports,arguments)
-},{"./first_name":593,"./last_name":595,"dup":216}],595:[function(require,module,exports){
+},{}],615:[function(require,module,exports){
+arguments[4][205][0].apply(exports,arguments)
+},{"./first_name":614,"./last_name":616,"dup":205}],616:[function(require,module,exports){
 module["exports"] = [
   "Adhikari",
   "Aryal",
@@ -32920,16 +41868,16 @@ module["exports"] = [
   "Thapa"
 ];
 
-},{}],596:[function(require,module,exports){
+},{}],617:[function(require,module,exports){
 module["exports"] = [
   "##-#######",
   "+977-#-#######",
   "+977########"
 ];
 
-},{}],597:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":596,"dup":74}],598:[function(require,module,exports){
+},{}],618:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":617,"dup":55}],619:[function(require,module,exports){
 module["exports"] = [
   "#",
   "##",
@@ -32942,7 +41890,7 @@ module["exports"] = [
   "### III"
 ];
 
-},{}],599:[function(require,module,exports){
+},{}],620:[function(require,module,exports){
 module["exports"] = [
   "#{Name.first_name}#{city_suffix}",
   "#{Name.last_name}#{city_suffix}",
@@ -32950,7 +41898,7 @@ module["exports"] = [
   "#{city_prefix} #{Name.last_name}#{city_suffix}"
 ];
 
-},{}],600:[function(require,module,exports){
+},{}],621:[function(require,module,exports){
 module["exports"] = [
   "Noord",
   "Oost",
@@ -32960,7 +41908,7 @@ module["exports"] = [
   "Oud"
 ];
 
-},{}],601:[function(require,module,exports){
+},{}],622:[function(require,module,exports){
 module["exports"] = [
   "dam",
   "berg",
@@ -32993,7 +41941,7 @@ module["exports"] = [
   "meer"
 ];
 
-},{}],602:[function(require,module,exports){
+},{}],623:[function(require,module,exports){
 module["exports"] = [
   "Afghanistan",
   "Akrotiri",
@@ -33253,12 +42201,12 @@ module["exports"] = [
   "Zwitserland"
 ];
 
-},{}],603:[function(require,module,exports){
+},{}],624:[function(require,module,exports){
 module["exports"] = [
   "Nederland"
 ];
 
-},{}],604:[function(require,module,exports){
+},{}],625:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -33274,19 +42222,19 @@ address.postcode = require("./postcode");
 address.state = require("./state");
 address.default_country = require("./default_country");
 
-},{"./building_number":598,"./city":599,"./city_prefix":600,"./city_suffix":601,"./country":602,"./default_country":603,"./postcode":605,"./secondary_address":606,"./state":607,"./street_address":608,"./street_name":609,"./street_suffix":610}],605:[function(require,module,exports){
+},{"./building_number":619,"./city":620,"./city_prefix":621,"./city_suffix":622,"./country":623,"./default_country":624,"./postcode":626,"./secondary_address":627,"./state":628,"./street_address":629,"./street_name":630,"./street_suffix":631}],626:[function(require,module,exports){
 module["exports"] = [
   "#### ??"
 ];
 
-},{}],606:[function(require,module,exports){
+},{}],627:[function(require,module,exports){
 module["exports"] = [
   "1 hoog",
   "2 hoog",
   "3 hoog"
 ];
 
-},{}],607:[function(require,module,exports){
+},{}],628:[function(require,module,exports){
 module["exports"] = [
   "Noord-Holland",
   "Zuid-Holland",
@@ -33302,11 +42250,11 @@ module["exports"] = [
   "Flevoland"
 ];
 
-},{}],608:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],609:[function(require,module,exports){
-arguments[4][515][0].apply(exports,arguments)
-},{"dup":515}],610:[function(require,module,exports){
+},{}],629:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],630:[function(require,module,exports){
+arguments[4][536][0].apply(exports,arguments)
+},{"dup":536}],631:[function(require,module,exports){
 module["exports"] = [
   "straat",
   "laan",
@@ -33315,9 +42263,9 @@ module["exports"] = [
   "park"
 ];
 
-},{}],611:[function(require,module,exports){
-arguments[4][210][0].apply(exports,arguments)
-},{"./suffix":612,"dup":210}],612:[function(require,module,exports){
+},{}],632:[function(require,module,exports){
+arguments[4][199][0].apply(exports,arguments)
+},{"./suffix":633,"dup":199}],633:[function(require,module,exports){
 module["exports"] = [
   "BV",
   "V.O.F.",
@@ -33325,7 +42273,7 @@ module["exports"] = [
   "en Zonen"
 ];
 
-},{}],613:[function(require,module,exports){
+},{}],634:[function(require,module,exports){
 var nl = {};
 module['exports'] = nl;
 nl.title = "Dutch";
@@ -33336,7 +42284,7 @@ nl.lorem = require("./lorem");
 nl.name = require("./name");
 nl.phone_number = require("./phone_number");
 
-},{"./address":604,"./company":611,"./internet":616,"./lorem":617,"./name":621,"./phone_number":628}],614:[function(require,module,exports){
+},{"./address":625,"./company":632,"./internet":637,"./lorem":638,"./name":642,"./phone_number":649}],635:[function(require,module,exports){
 module["exports"] = [
   "nl",
   "com",
@@ -33344,17 +42292,17 @@ module["exports"] = [
   "org"
 ];
 
-},{}],615:[function(require,module,exports){
-arguments[4][63][0].apply(exports,arguments)
-},{"dup":63}],616:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":614,"./free_email":615,"dup":64}],617:[function(require,module,exports){
-arguments[4][188][0].apply(exports,arguments)
-},{"./supplemental":618,"./words":619,"dup":188}],618:[function(require,module,exports){
-arguments[4][189][0].apply(exports,arguments)
-},{"dup":189}],619:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],620:[function(require,module,exports){
+},{}],636:[function(require,module,exports){
+arguments[4][44][0].apply(exports,arguments)
+},{"dup":44}],637:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":635,"./free_email":636,"dup":45}],638:[function(require,module,exports){
+arguments[4][175][0].apply(exports,arguments)
+},{"./supplemental":639,"./words":640,"dup":175}],639:[function(require,module,exports){
+arguments[4][176][0].apply(exports,arguments)
+},{"dup":176}],640:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],641:[function(require,module,exports){
 module["exports"] = [
   "Amber",
   "Anna",
@@ -33408,7 +42356,7 @@ module["exports"] = [
   "Tom"
 ];
 
-},{}],621:[function(require,module,exports){
+},{}],642:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -33418,7 +42366,7 @@ name.prefix = require("./prefix");
 name.suffix = require("./suffix");
 name.name = require("./name");
 
-},{"./first_name":620,"./last_name":622,"./name":623,"./prefix":624,"./suffix":625,"./tussenvoegsel":626}],622:[function(require,module,exports){
+},{"./first_name":641,"./last_name":643,"./name":644,"./prefix":645,"./suffix":646,"./tussenvoegsel":647}],643:[function(require,module,exports){
 module["exports"] = [
   "Bakker",
   "Beek",
@@ -33472,7 +42420,7 @@ module["exports"] = [
   "Wit"
 ];
 
-},{}],623:[function(require,module,exports){
+},{}],644:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{first_name} #{last_name}",
   "#{first_name} #{last_name} #{suffix}",
@@ -33482,7 +42430,7 @@ module["exports"] = [
   "#{first_name} #{tussenvoegsel} #{last_name}"
 ];
 
-},{}],624:[function(require,module,exports){
+},{}],645:[function(require,module,exports){
 module["exports"] = [
   "Dhr.",
   "Mevr. Dr.",
@@ -33491,9 +42439,9 @@ module["exports"] = [
   "Prof."
 ];
 
-},{}],625:[function(require,module,exports){
-arguments[4][579][0].apply(exports,arguments)
-},{"dup":579}],626:[function(require,module,exports){
+},{}],646:[function(require,module,exports){
+arguments[4][600][0].apply(exports,arguments)
+},{"dup":600}],647:[function(require,module,exports){
 module["exports"] = [
   "van",
   "van de",
@@ -33504,7 +42452,7 @@ module["exports"] = [
   "den"
 ];
 
-},{}],627:[function(require,module,exports){
+},{}],648:[function(require,module,exports){
 module["exports"] = [
   "(####) ######",
   "##########",
@@ -33512,13 +42460,13 @@ module["exports"] = [
   "06 #### ####"
 ];
 
-},{}],628:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":627,"dup":74}],629:[function(require,module,exports){
-arguments[4][118][0].apply(exports,arguments)
-},{"dup":118}],630:[function(require,module,exports){
-arguments[4][76][0].apply(exports,arguments)
-},{"dup":76}],631:[function(require,module,exports){
+},{}],649:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":648,"dup":55}],650:[function(require,module,exports){
+arguments[4][104][0].apply(exports,arguments)
+},{"dup":104}],651:[function(require,module,exports){
+arguments[4][57][0].apply(exports,arguments)
+},{"dup":57}],652:[function(require,module,exports){
 module["exports"] = [
   "Aleksandrów Kujawski",
   "Aleksandrów Łódzki",
@@ -34430,7 +43378,7 @@ module["exports"] = [
   "Żywiec"
 ];
 
-},{}],632:[function(require,module,exports){
+},{}],653:[function(require,module,exports){
 module["exports"] = [
   "Afganistan",
   "Albania",
@@ -34633,12 +43581,12 @@ module["exports"] = [
   "Zjednoczone Emiraty Arabskie"
 ];
 
-},{}],633:[function(require,module,exports){
+},{}],654:[function(require,module,exports){
 module["exports"] = [
   "Polska"
 ];
 
-},{}],634:[function(require,module,exports){
+},{}],655:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.country = require("./country");
@@ -34654,14 +43602,14 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":629,"./city":630,"./city_name":631,"./country":632,"./default_country":633,"./postcode":635,"./secondary_address":636,"./state":637,"./state_abbr":638,"./street_address":639,"./street_name":640,"./street_prefix":641}],635:[function(require,module,exports){
+},{"./building_number":650,"./city":651,"./city_name":652,"./country":653,"./default_country":654,"./postcode":656,"./secondary_address":657,"./state":658,"./state_abbr":659,"./street_address":660,"./street_name":661,"./street_prefix":662}],656:[function(require,module,exports){
 module["exports"] = [
   "##-###"
 ];
 
-},{}],636:[function(require,module,exports){
-arguments[4][129][0].apply(exports,arguments)
-},{"dup":129}],637:[function(require,module,exports){
+},{}],657:[function(require,module,exports){
+arguments[4][115][0].apply(exports,arguments)
+},{"dup":115}],658:[function(require,module,exports){
 module["exports"] = [
   "Dolnośląskie",
   "Kujawsko-pomorskie",
@@ -34681,7 +43629,7 @@ module["exports"] = [
   "Zachodniopomorskie"
 ];
 
-},{}],638:[function(require,module,exports){
+},{}],659:[function(require,module,exports){
 module["exports"] = [
   "DŚ",
   "KP",
@@ -34701,20 +43649,20 @@ module["exports"] = [
   "ZP"
 ];
 
-},{}],639:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],640:[function(require,module,exports){
+},{}],660:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],661:[function(require,module,exports){
 module["exports"] = [
   "#{street_prefix} #{Name.last_name}"
 ];
 
-},{}],641:[function(require,module,exports){
+},{}],662:[function(require,module,exports){
 module["exports"] = [
   "ul.",
   "al."
 ];
 
-},{}],642:[function(require,module,exports){
+},{}],663:[function(require,module,exports){
 module["exports"] = [
   "50-###-##-##",
   "51-###-##-##",
@@ -34730,19 +43678,19 @@ module["exports"] = [
   "88-###-##-##"
 ];
 
-},{}],643:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":642,"dup":56}],644:[function(require,module,exports){
-arguments[4][150][0].apply(exports,arguments)
-},{"dup":150}],645:[function(require,module,exports){
-arguments[4][151][0].apply(exports,arguments)
-},{"dup":151}],646:[function(require,module,exports){
-arguments[4][152][0].apply(exports,arguments)
-},{"dup":152}],647:[function(require,module,exports){
-arguments[4][153][0].apply(exports,arguments)
-},{"dup":153}],648:[function(require,module,exports){
-arguments[4][154][0].apply(exports,arguments)
-},{"dup":154}],649:[function(require,module,exports){
+},{}],664:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":663,"dup":37}],665:[function(require,module,exports){
+arguments[4][136][0].apply(exports,arguments)
+},{"dup":136}],666:[function(require,module,exports){
+arguments[4][137][0].apply(exports,arguments)
+},{"dup":137}],667:[function(require,module,exports){
+arguments[4][138][0].apply(exports,arguments)
+},{"dup":138}],668:[function(require,module,exports){
+arguments[4][139][0].apply(exports,arguments)
+},{"dup":139}],669:[function(require,module,exports){
+arguments[4][140][0].apply(exports,arguments)
+},{"dup":140}],670:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
@@ -34754,13 +43702,13 @@ company.bs_adjective = require("./bs_adjective");
 company.bs_noun = require("./bs_noun");
 company.name = require("./name");
 
-},{"./adjetive":644,"./bs_adjective":645,"./bs_noun":646,"./bs_verb":647,"./descriptor":648,"./name":650,"./noun":651,"./suffix":652}],650:[function(require,module,exports){
-arguments[4][156][0].apply(exports,arguments)
-},{"dup":156}],651:[function(require,module,exports){
-arguments[4][157][0].apply(exports,arguments)
-},{"dup":157}],652:[function(require,module,exports){
-arguments[4][158][0].apply(exports,arguments)
-},{"dup":158}],653:[function(require,module,exports){
+},{"./adjetive":665,"./bs_adjective":666,"./bs_noun":667,"./bs_verb":668,"./descriptor":669,"./name":671,"./noun":672,"./suffix":673}],671:[function(require,module,exports){
+arguments[4][142][0].apply(exports,arguments)
+},{"dup":142}],672:[function(require,module,exports){
+arguments[4][143][0].apply(exports,arguments)
+},{"dup":143}],673:[function(require,module,exports){
+arguments[4][144][0].apply(exports,arguments)
+},{"dup":144}],674:[function(require,module,exports){
 var pl = {};
 module['exports'] = pl;
 pl.title = "Polish";
@@ -34772,7 +43720,7 @@ pl.lorem = require("./lorem");
 pl.phone_number = require("./phone_number");
 pl.cell_phone = require("./cell_phone");
 
-},{"./address":634,"./cell_phone":643,"./company":649,"./internet":656,"./lorem":657,"./name":661,"./phone_number":667}],654:[function(require,module,exports){
+},{"./address":655,"./cell_phone":664,"./company":670,"./internet":677,"./lorem":678,"./name":682,"./phone_number":688}],675:[function(require,module,exports){
 module["exports"] = [
   "com",
   "pl",
@@ -34781,17 +43729,17 @@ module["exports"] = [
   "org"
 ];
 
-},{}],655:[function(require,module,exports){
-arguments[4][63][0].apply(exports,arguments)
-},{"dup":63}],656:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":654,"./free_email":655,"dup":64}],657:[function(require,module,exports){
-arguments[4][188][0].apply(exports,arguments)
-},{"./supplemental":658,"./words":659,"dup":188}],658:[function(require,module,exports){
-arguments[4][189][0].apply(exports,arguments)
-},{"dup":189}],659:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],660:[function(require,module,exports){
+},{}],676:[function(require,module,exports){
+arguments[4][44][0].apply(exports,arguments)
+},{"dup":44}],677:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":675,"./free_email":676,"dup":45}],678:[function(require,module,exports){
+arguments[4][175][0].apply(exports,arguments)
+},{"./supplemental":679,"./words":680,"dup":175}],679:[function(require,module,exports){
+arguments[4][176][0].apply(exports,arguments)
+},{"dup":176}],680:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],681:[function(require,module,exports){
 module["exports"] = [
   "Aaron",
   "Abraham",
@@ -35204,9 +44152,9 @@ module["exports"] = [
   "Zoe"
 ];
 
-},{}],661:[function(require,module,exports){
-arguments[4][423][0].apply(exports,arguments)
-},{"./first_name":660,"./last_name":662,"./name":663,"./prefix":664,"./title":665,"dup":423}],662:[function(require,module,exports){
+},{}],682:[function(require,module,exports){
+arguments[4][413][0].apply(exports,arguments)
+},{"./first_name":681,"./last_name":683,"./name":684,"./prefix":685,"./title":686,"dup":413}],683:[function(require,module,exports){
 module["exports"] = [
   "Adamczak",
   "Adamczyk",
@@ -35914,17 +44862,17 @@ module["exports"] = [
   "Żyła"
 ];
 
-},{}],663:[function(require,module,exports){
-arguments[4][468][0].apply(exports,arguments)
-},{"dup":468}],664:[function(require,module,exports){
+},{}],684:[function(require,module,exports){
+arguments[4][458][0].apply(exports,arguments)
+},{"dup":458}],685:[function(require,module,exports){
 module["exports"] = [
   "Pan",
   "Pani"
 ];
 
-},{}],665:[function(require,module,exports){
-arguments[4][197][0].apply(exports,arguments)
-},{"dup":197}],666:[function(require,module,exports){
+},{}],686:[function(require,module,exports){
+arguments[4][184][0].apply(exports,arguments)
+},{"dup":184}],687:[function(require,module,exports){
 module["exports"] = [
   "12-###-##-##",
   "13-###-##-##",
@@ -35977,11 +44925,11 @@ module["exports"] = [
   "95-###-##-##"
 ];
 
-},{}],667:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":666,"dup":74}],668:[function(require,module,exports){
-arguments[4][118][0].apply(exports,arguments)
-},{"dup":118}],669:[function(require,module,exports){
+},{}],688:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":687,"dup":55}],689:[function(require,module,exports){
+arguments[4][104][0].apply(exports,arguments)
+},{"dup":104}],690:[function(require,module,exports){
 module["exports"] = [
   "Nova",
   "Velha",
@@ -35990,7 +44938,7 @@ module["exports"] = [
   "Município de"
 ];
 
-},{}],670:[function(require,module,exports){
+},{}],691:[function(require,module,exports){
 module["exports"] = [
   "do Descoberto",
   "de Nossa Senhora",
@@ -35998,7 +44946,7 @@ module["exports"] = [
   "do Sul"
 ];
 
-},{}],671:[function(require,module,exports){
+},{}],692:[function(require,module,exports){
 module["exports"] = [
   "Afeganistão",
   "Albânia",
@@ -36239,12 +45187,12 @@ module["exports"] = [
   "Zimbábue"
 ];
 
-},{}],672:[function(require,module,exports){
+},{}],693:[function(require,module,exports){
 module["exports"] = [
   "Brasil"
 ];
 
-},{}],673:[function(require,module,exports){
+},{}],694:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -36258,13 +45206,13 @@ address.state = require("./state");
 address.state_abbr = require("./state_abbr");
 address.default_country = require("./default_country");
 
-},{"./building_number":668,"./city_prefix":669,"./city_suffix":670,"./country":671,"./default_country":672,"./postcode":674,"./secondary_address":675,"./state":676,"./state_abbr":677,"./street_suffix":678}],674:[function(require,module,exports){
+},{"./building_number":689,"./city_prefix":690,"./city_suffix":691,"./country":692,"./default_country":693,"./postcode":695,"./secondary_address":696,"./state":697,"./state_abbr":698,"./street_suffix":699}],695:[function(require,module,exports){
 module["exports"] = [
   "#####",
   "#####-###"
 ];
 
-},{}],675:[function(require,module,exports){
+},{}],696:[function(require,module,exports){
 module["exports"] = [
   "Apto. ###",
   "Sobrado ##",
@@ -36273,7 +45221,7 @@ module["exports"] = [
   "Quadra ##"
 ];
 
-},{}],676:[function(require,module,exports){
+},{}],697:[function(require,module,exports){
 module["exports"] = [
   "Acre",
   "Alagoas",
@@ -36304,7 +45252,7 @@ module["exports"] = [
   "Tocantins"
 ];
 
-},{}],677:[function(require,module,exports){
+},{}],698:[function(require,module,exports){
 module["exports"] = [
   "AC",
   "AL",
@@ -36332,7 +45280,7 @@ module["exports"] = [
   "SP"
 ];
 
-},{}],678:[function(require,module,exports){
+},{}],699:[function(require,module,exports){
 module["exports"] = [
   "Rua",
   "Avenida",
@@ -36344,16 +45292,16 @@ module["exports"] = [
   "Rodovia"
 ];
 
-},{}],679:[function(require,module,exports){
-arguments[4][110][0].apply(exports,arguments)
-},{"./name":680,"./suffix":681,"dup":110}],680:[function(require,module,exports){
+},{}],700:[function(require,module,exports){
+arguments[4][91][0].apply(exports,arguments)
+},{"./name":701,"./suffix":702,"dup":91}],701:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name}-#{Name.last_name}",
   "#{Name.last_name}, #{Name.last_name} e #{Name.last_name}"
 ];
 
-},{}],681:[function(require,module,exports){
+},{}],702:[function(require,module,exports){
 module["exports"] = [
   "S.A.",
   "LTDA",
@@ -36361,7 +45309,7 @@ module["exports"] = [
   "Comércio"
 ];
 
-},{}],682:[function(require,module,exports){
+},{}],703:[function(require,module,exports){
 var pt_BR = {};
 module['exports'] = pt_BR;
 pt_BR.title = "Portuguese (Brazil)";
@@ -36372,7 +45320,7 @@ pt_BR.lorem = require("./lorem");
 pt_BR.name = require("./name");
 pt_BR.phone_number = require("./phone_number");
 
-},{"./address":673,"./company":679,"./internet":685,"./lorem":686,"./name":689,"./phone_number":694}],683:[function(require,module,exports){
+},{"./address":694,"./company":700,"./internet":706,"./lorem":707,"./name":710,"./phone_number":715}],704:[function(require,module,exports){
 module["exports"] = [
   "br",
   "com",
@@ -36383,7 +45331,7 @@ module["exports"] = [
   "org"
 ];
 
-},{}],684:[function(require,module,exports){
+},{}],705:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "yahoo.com",
@@ -36392,13 +45340,13 @@ module["exports"] = [
   "bol.com.br"
 ];
 
-},{}],685:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":683,"./free_email":684,"dup":64}],686:[function(require,module,exports){
-arguments[4][65][0].apply(exports,arguments)
-},{"./words":687,"dup":65}],687:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],688:[function(require,module,exports){
+},{}],706:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":704,"./free_email":705,"dup":45}],707:[function(require,module,exports){
+arguments[4][46][0].apply(exports,arguments)
+},{"./words":708,"dup":46}],708:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],709:[function(require,module,exports){
 module["exports"] = [
   "Alessandro",
   "Alessandra",
@@ -36493,7 +45441,7 @@ module["exports"] = [
   "Warley"
 ];
 
-},{}],689:[function(require,module,exports){
+},{}],710:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
@@ -36501,7 +45449,7 @@ name.last_name = require("./last_name");
 name.prefix = require("./prefix");
 name.suffix = require("./suffix");
 
-},{"./first_name":688,"./last_name":690,"./prefix":691,"./suffix":692}],690:[function(require,module,exports){
+},{"./first_name":709,"./last_name":711,"./prefix":712,"./suffix":713}],711:[function(require,module,exports){
 module["exports"] = [
   "Silva",
   "Souza",
@@ -36527,7 +45475,7 @@ module["exports"] = [
   "Albuquerque"
 ];
 
-},{}],691:[function(require,module,exports){
+},{}],712:[function(require,module,exports){
 module["exports"] = [
   "Sr.",
   "Sra.",
@@ -36535,33 +45483,33 @@ module["exports"] = [
   "Dr."
 ];
 
-},{}],692:[function(require,module,exports){
+},{}],713:[function(require,module,exports){
 module["exports"] = [
   "Jr.",
   "Neto",
   "Filho"
 ];
 
-},{}],693:[function(require,module,exports){
+},{}],714:[function(require,module,exports){
 module["exports"] = [
   "(##) ####-####",
   "+55 (##) ####-####",
   "(##) #####-####"
 ];
 
-},{}],694:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":693,"dup":74}],695:[function(require,module,exports){
+},{}],715:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":714,"dup":55}],716:[function(require,module,exports){
 module["exports"] = [
   "###"
 ];
 
-},{}],696:[function(require,module,exports){
+},{}],717:[function(require,module,exports){
 module["exports"] = [
   "#{Address.city_name}"
 ];
 
-},{}],697:[function(require,module,exports){
+},{}],718:[function(require,module,exports){
 module["exports"] = [
   "Москва",
   "Владимир",
@@ -36611,7 +45559,7 @@ module["exports"] = [
   "Сочи"
 ];
 
-},{}],698:[function(require,module,exports){
+},{}],719:[function(require,module,exports){
 module["exports"] = [
   "Австралия",
   "Австрия",
@@ -36825,12 +45773,12 @@ module["exports"] = [
   "Япония"
 ];
 
-},{}],699:[function(require,module,exports){
+},{}],720:[function(require,module,exports){
 module["exports"] = [
   "Россия"
 ];
 
-},{}],700:[function(require,module,exports){
+},{}],721:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.country = require("./country");
@@ -36846,17 +45794,17 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":695,"./city":696,"./city_name":697,"./country":698,"./default_country":699,"./postcode":701,"./secondary_address":702,"./state":703,"./street_address":704,"./street_name":705,"./street_suffix":706,"./street_title":707}],701:[function(require,module,exports){
+},{"./building_number":716,"./city":717,"./city_name":718,"./country":719,"./default_country":720,"./postcode":722,"./secondary_address":723,"./state":724,"./street_address":725,"./street_name":726,"./street_suffix":727,"./street_title":728}],722:[function(require,module,exports){
 module["exports"] = [
   "######"
 ];
 
-},{}],702:[function(require,module,exports){
+},{}],723:[function(require,module,exports){
 module["exports"] = [
   "кв. ###"
 ];
 
-},{}],703:[function(require,module,exports){
+},{}],724:[function(require,module,exports){
 module["exports"] = [
   "Республика Адыгея",
   "Республика Башкортостан",
@@ -36946,18 +45894,18 @@ module["exports"] = [
   "Чеченская Республика"
 ];
 
-},{}],704:[function(require,module,exports){
+},{}],725:[function(require,module,exports){
 module["exports"] = [
   "#{street_name}, #{building_number}"
 ];
 
-},{}],705:[function(require,module,exports){
+},{}],726:[function(require,module,exports){
 module["exports"] = [
   "#{street_suffix} #{Address.street_title}",
   "#{Address.street_title} #{street_suffix}"
 ];
 
-},{}],706:[function(require,module,exports){
+},{}],727:[function(require,module,exports){
 module["exports"] = [
   "ул.",
   "улица",
@@ -36967,7 +45915,7 @@ module["exports"] = [
   "пл."
 ];
 
-},{}],707:[function(require,module,exports){
+},{}],728:[function(require,module,exports){
 module["exports"] = [
   "Советская",
   "Молодежная",
@@ -37072,7 +46020,7 @@ module["exports"] = [
   "Майская"
 ];
 
-},{}],708:[function(require,module,exports){
+},{}],729:[function(require,module,exports){
 module["exports"] = [
   "красный",
   "зеленый",
@@ -37107,7 +46055,7 @@ module["exports"] = [
   "серебряный"
 ];
 
-},{}],709:[function(require,module,exports){
+},{}],730:[function(require,module,exports){
 module["exports"] = [
   "Книги",
   "Фильмы",
@@ -37132,9 +46080,9 @@ module["exports"] = [
   "промышленное"
 ];
 
-},{}],710:[function(require,module,exports){
-arguments[4][148][0].apply(exports,arguments)
-},{"./color":708,"./department":709,"./product_name":711,"dup":148}],711:[function(require,module,exports){
+},{}],731:[function(require,module,exports){
+arguments[4][134][0].apply(exports,arguments)
+},{"./color":729,"./department":730,"./product_name":732,"dup":134}],732:[function(require,module,exports){
 module["exports"] = {
   "adjective": [
     "Маленький",
@@ -37170,9 +46118,9 @@ module["exports"] = {
   ]
 };
 
-},{}],712:[function(require,module,exports){
-arguments[4][457][0].apply(exports,arguments)
-},{"./name":713,"./prefix":714,"./suffix":715,"dup":457}],713:[function(require,module,exports){
+},{}],733:[function(require,module,exports){
+arguments[4][447][0].apply(exports,arguments)
+},{"./name":734,"./prefix":735,"./suffix":736,"dup":447}],734:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{Name.female_first_name}",
   "#{prefix} #{Name.male_first_name}",
@@ -37184,7 +46132,7 @@ module["exports"] = [
   "#{prefix} #{Address.city_name}#{suffix}#{suffix}#{suffix}"
 ];
 
-},{}],714:[function(require,module,exports){
+},{}],735:[function(require,module,exports){
 module["exports"] = [
   "ИП",
   "ООО",
@@ -37195,7 +46143,7 @@ module["exports"] = [
   "ОП"
 ];
 
-},{}],715:[function(require,module,exports){
+},{}],736:[function(require,module,exports){
 module["exports"] = [
   "Снаб",
   "Торг",
@@ -37204,9 +46152,9 @@ module["exports"] = [
   "Сбыт"
 ];
 
-},{}],716:[function(require,module,exports){
-arguments[4][170][0].apply(exports,arguments)
-},{"./month":717,"./weekday":718,"dup":170}],717:[function(require,module,exports){
+},{}],737:[function(require,module,exports){
+arguments[4][156][0].apply(exports,arguments)
+},{"./month":738,"./weekday":739,"dup":156}],738:[function(require,module,exports){
 // source: http://unicode.org/cldr/trac/browser/tags/release-27/common/main/ru.xml#L1734
 module["exports"] = {
   wide: [
@@ -37267,7 +46215,7 @@ module["exports"] = {
   ]
 };
 
-},{}],718:[function(require,module,exports){
+},{}],739:[function(require,module,exports){
 // source: http://unicode.org/cldr/trac/browser/tags/release-27/common/main/ru.xml#L1825
 module["exports"] = {
   wide: [
@@ -37308,7 +46256,7 @@ module["exports"] = {
   ]
 };
 
-},{}],719:[function(require,module,exports){
+},{}],740:[function(require,module,exports){
 var ru = {};
 module['exports'] = ru;
 ru.title = "Russian";
@@ -37321,7 +46269,7 @@ ru.commerce = require("./commerce");
 ru.company = require("./company");
 ru.date = require("./date");
 
-},{"./address":700,"./commerce":710,"./company":712,"./date":716,"./internet":722,"./name":726,"./phone_number":734}],720:[function(require,module,exports){
+},{"./address":721,"./commerce":731,"./company":733,"./date":737,"./internet":743,"./name":747,"./phone_number":755}],741:[function(require,module,exports){
 module["exports"] = [
   "com",
   "ru",
@@ -37331,7 +46279,7 @@ module["exports"] = [
   "org"
 ];
 
-},{}],721:[function(require,module,exports){
+},{}],742:[function(require,module,exports){
 module["exports"] = [
   "yandex.ru",
   "ya.ru",
@@ -37341,9 +46289,9 @@ module["exports"] = [
   "hotmail.com"
 ];
 
-},{}],722:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":720,"./free_email":721,"dup":64}],723:[function(require,module,exports){
+},{}],743:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":741,"./free_email":742,"dup":45}],744:[function(require,module,exports){
 module["exports"] = [
   "Анна",
   "Алёна",
@@ -37403,7 +46351,7 @@ module["exports"] = [
   "Юлия"
 ];
 
-},{}],724:[function(require,module,exports){
+},{}],745:[function(require,module,exports){
 module["exports"] = [
   "Смирнова",
   "Иванова",
@@ -37657,7 +46605,7 @@ module["exports"] = [
   "Турова"
 ];
 
-},{}],725:[function(require,module,exports){
+},{}],746:[function(require,module,exports){
 module["exports"] = [
   "Александровна",
   "Алексеевна",
@@ -37712,7 +46660,7 @@ module["exports"] = [
   "Ярославовна"
 ];
 
-},{}],726:[function(require,module,exports){
+},{}],747:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.male_first_name = require("./male_first_name");
@@ -37725,7 +46673,7 @@ name.prefix = require("./prefix");
 name.suffix = require("./suffix");
 name.name = require("./name");
 
-},{"./female_first_name":723,"./female_last_name":724,"./female_middle_name":725,"./male_first_name":727,"./male_last_name":728,"./male_middle_name":729,"./name":730,"./prefix":731,"./suffix":732}],727:[function(require,module,exports){
+},{"./female_first_name":744,"./female_last_name":745,"./female_middle_name":746,"./male_first_name":748,"./male_last_name":749,"./male_middle_name":750,"./name":751,"./prefix":752,"./suffix":753}],748:[function(require,module,exports){
 module["exports"] = [
   "Александр",
   "Алексей",
@@ -37781,7 +46729,7 @@ module["exports"] = [
   "Ярослав"
 ];
 
-},{}],728:[function(require,module,exports){
+},{}],749:[function(require,module,exports){
 module["exports"] = [
   "Смирнов",
   "Иванов",
@@ -38035,7 +46983,7 @@ module["exports"] = [
   "Туров"
 ];
 
-},{}],729:[function(require,module,exports){
+},{}],750:[function(require,module,exports){
 module["exports"] = [
   "Александрович",
   "Алексеевич",
@@ -38091,7 +47039,7 @@ module["exports"] = [
   "Ярославович"
 ];
 
-},{}],730:[function(require,module,exports){
+},{}],751:[function(require,module,exports){
 module["exports"] = [
   "#{male_first_name} #{male_last_name}",
   "#{male_last_name} #{male_first_name}",
@@ -38103,27 +47051,27 @@ module["exports"] = [
   "#{female_last_name} #{female_first_name} #{female_middle_name}"
 ];
 
-},{}],731:[function(require,module,exports){
-arguments[4][505][0].apply(exports,arguments)
-},{"dup":505}],732:[function(require,module,exports){
-arguments[4][505][0].apply(exports,arguments)
-},{"dup":505}],733:[function(require,module,exports){
+},{}],752:[function(require,module,exports){
+arguments[4][526][0].apply(exports,arguments)
+},{"dup":526}],753:[function(require,module,exports){
+arguments[4][526][0].apply(exports,arguments)
+},{"dup":526}],754:[function(require,module,exports){
 module["exports"] = [
   "(9##)###-##-##"
 ];
 
-},{}],734:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":733,"dup":74}],735:[function(require,module,exports){
+},{}],755:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":754,"dup":55}],756:[function(require,module,exports){
 module["exports"] = [
   "#",
   "##",
   "###"
 ];
 
-},{}],736:[function(require,module,exports){
-arguments[4][76][0].apply(exports,arguments)
-},{"dup":76}],737:[function(require,module,exports){
+},{}],757:[function(require,module,exports){
+arguments[4][57][0].apply(exports,arguments)
+},{"dup":57}],758:[function(require,module,exports){
 module["exports"] = [
   "Bánovce nad Bebravou",
   "Banská Bystrica",
@@ -38206,11 +47154,11 @@ module["exports"] = [
   "Zvolen"
 ];
 
-},{}],738:[function(require,module,exports){
-arguments[4][120][0].apply(exports,arguments)
-},{"dup":120}],739:[function(require,module,exports){
-arguments[4][121][0].apply(exports,arguments)
-},{"dup":121}],740:[function(require,module,exports){
+},{}],759:[function(require,module,exports){
+arguments[4][106][0].apply(exports,arguments)
+},{"dup":106}],760:[function(require,module,exports){
+arguments[4][107][0].apply(exports,arguments)
+},{"dup":107}],761:[function(require,module,exports){
 module["exports"] = [
   "Afganistan",
   "Afgánsky islamský štát",
@@ -38596,12 +47544,12 @@ module["exports"] = [
   "Zimbabwianska republika"
 ];
 
-},{}],741:[function(require,module,exports){
+},{}],762:[function(require,module,exports){
 module["exports"] = [
   "Slovensko"
 ];
 
-},{}],742:[function(require,module,exports){
+},{}],763:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -38620,20 +47568,20 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":735,"./city":736,"./city_name":737,"./city_prefix":738,"./city_suffix":739,"./country":740,"./default_country":741,"./postcode":743,"./secondary_address":744,"./state":745,"./state_abbr":746,"./street":747,"./street_address":748,"./street_name":749,"./time_zone":750}],743:[function(require,module,exports){
+},{"./building_number":756,"./city":757,"./city_name":758,"./city_prefix":759,"./city_suffix":760,"./country":761,"./default_country":762,"./postcode":764,"./secondary_address":765,"./state":766,"./state_abbr":767,"./street":768,"./street_address":769,"./street_name":770,"./time_zone":771}],764:[function(require,module,exports){
 module["exports"] = [
   "#####",
   "### ##",
   "## ###"
 ];
 
-},{}],744:[function(require,module,exports){
-arguments[4][129][0].apply(exports,arguments)
-},{"dup":129}],745:[function(require,module,exports){
-arguments[4][505][0].apply(exports,arguments)
-},{"dup":505}],746:[function(require,module,exports){
-arguments[4][505][0].apply(exports,arguments)
-},{"dup":505}],747:[function(require,module,exports){
+},{}],765:[function(require,module,exports){
+arguments[4][115][0].apply(exports,arguments)
+},{"dup":115}],766:[function(require,module,exports){
+arguments[4][526][0].apply(exports,arguments)
+},{"dup":526}],767:[function(require,module,exports){
+arguments[4][526][0].apply(exports,arguments)
+},{"dup":526}],768:[function(require,module,exports){
 module["exports"] = [
   "Adámiho",
   "Ahoj",
@@ -39797,18 +48745,18 @@ module["exports"] = [
   "Župné námestie"
 ];
 
-},{}],748:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],749:[function(require,module,exports){
+},{}],769:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],770:[function(require,module,exports){
 module["exports"] = [
   "#{street}"
 ];
 
-},{}],750:[function(require,module,exports){
-arguments[4][135][0].apply(exports,arguments)
-},{"dup":135}],751:[function(require,module,exports){
-arguments[4][150][0].apply(exports,arguments)
-},{"dup":150}],752:[function(require,module,exports){
+},{}],771:[function(require,module,exports){
+arguments[4][121][0].apply(exports,arguments)
+},{"dup":121}],772:[function(require,module,exports){
+arguments[4][136][0].apply(exports,arguments)
+},{"dup":136}],773:[function(require,module,exports){
 module["exports"] = [
   "clicks-and-mortar",
   "value-added",
@@ -39921,11 +48869,11 @@ module["exports"] = [
   "methodologies"
 ];
 
-},{}],753:[function(require,module,exports){
-arguments[4][153][0].apply(exports,arguments)
-},{"dup":153}],754:[function(require,module,exports){
-arguments[4][154][0].apply(exports,arguments)
-},{"dup":154}],755:[function(require,module,exports){
+},{}],774:[function(require,module,exports){
+arguments[4][139][0].apply(exports,arguments)
+},{"dup":139}],775:[function(require,module,exports){
+arguments[4][140][0].apply(exports,arguments)
+},{"dup":140}],776:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.suffix = require("./suffix");
@@ -39936,23 +48884,23 @@ company.bs_verb = require("./bs_verb");
 company.bs_noun = require("./bs_noun");
 company.name = require("./name");
 
-},{"./adjective":751,"./bs_noun":752,"./bs_verb":753,"./descriptor":754,"./name":756,"./noun":757,"./suffix":758}],756:[function(require,module,exports){
+},{"./adjective":772,"./bs_noun":773,"./bs_verb":774,"./descriptor":775,"./name":777,"./noun":778,"./suffix":779}],777:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name} #{suffix}",
   "#{Name.man_last_name} a #{Name.man_last_name} #{suffix}"
 ];
 
-},{}],757:[function(require,module,exports){
-arguments[4][157][0].apply(exports,arguments)
-},{"dup":157}],758:[function(require,module,exports){
+},{}],778:[function(require,module,exports){
+arguments[4][143][0].apply(exports,arguments)
+},{"dup":143}],779:[function(require,module,exports){
 module["exports"] = [
   "s.r.o.",
   "a.s.",
   "v.o.s."
 ];
 
-},{}],759:[function(require,module,exports){
+},{}],780:[function(require,module,exports){
 var sk = {};
 module['exports'] = sk;
 sk.title = "Slovakian";
@@ -39963,7 +48911,7 @@ sk.lorem = require("./lorem");
 sk.name = require("./name");
 sk.phone_number = require("./phone_number");
 
-},{"./address":742,"./company":755,"./internet":762,"./lorem":763,"./name":766,"./phone_number":776}],760:[function(require,module,exports){
+},{"./address":763,"./company":776,"./internet":783,"./lorem":784,"./name":789,"./phone_number":797}],781:[function(require,module,exports){
 module["exports"] = [
   "sk",
   "com",
@@ -39972,34 +48920,493 @@ module["exports"] = [
   "org"
 ];
 
-},{}],761:[function(require,module,exports){
+},{}],782:[function(require,module,exports){
 module["exports"] = [
   "gmail.com",
   "zoznam.sk",
   "azet.sk"
 ];
 
-},{}],762:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":760,"./free_email":761,"dup":64}],763:[function(require,module,exports){
-arguments[4][188][0].apply(exports,arguments)
-},{"./supplemental":764,"./words":765,"dup":188}],764:[function(require,module,exports){
-arguments[4][189][0].apply(exports,arguments)
-},{"dup":189}],765:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],766:[function(require,module,exports){
+},{}],783:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":781,"./free_email":782,"dup":45}],784:[function(require,module,exports){
+arguments[4][175][0].apply(exports,arguments)
+},{"./supplemental":785,"./words":786,"dup":175}],785:[function(require,module,exports){
+arguments[4][176][0].apply(exports,arguments)
+},{"dup":176}],786:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],787:[function(require,module,exports){
+module["exports"] = [
+  "Alexandra",
+  "Karina",
+  "Daniela",
+  "Andrea",
+  "Antónia",
+  "Bohuslava",
+  "Dáša",
+  "Malvína",
+  "Kristína",
+  "Nataša",
+  "Bohdana",
+  "Drahomíra",
+  "Sára",
+  "Zora",
+  "Tamara",
+  "Ema",
+  "Tatiana",
+  "Erika",
+  "Veronika",
+  "Agáta",
+  "Dorota",
+  "Vanda",
+  "Zoja",
+  "Gabriela",
+  "Perla",
+  "Ida",
+  "Liana",
+  "Miloslava",
+  "Vlasta",
+  "Lívia",
+  "Eleonóra",
+  "Etela",
+  "Romana",
+  "Zlatica",
+  "Anežka",
+  "Bohumila",
+  "Františka",
+  "Angela",
+  "Matilda",
+  "Svetlana",
+  "Ľubica",
+  "Alena",
+  "Soňa",
+  "Vieroslava",
+  "Zita",
+  "Miroslava",
+  "Irena",
+  "Milena",
+  "Estera",
+  "Justína",
+  "Dana",
+  "Danica",
+  "Jela",
+  "Jaroslava",
+  "Jarmila",
+  "Lea",
+  "Anastázia",
+  "Galina",
+  "Lesana",
+  "Hermína",
+  "Monika",
+  "Ingrida",
+  "Viktória",
+  "Blažena",
+  "Žofia",
+  "Sofia",
+  "Gizela",
+  "Viola",
+  "Gertrúda",
+  "Zina",
+  "Júlia",
+  "Juliana",
+  "Želmíra",
+  "Ela",
+  "Vanesa",
+  "Iveta",
+  "Vilma",
+  "Petronela",
+  "Žaneta",
+  "Xénia",
+  "Karolína",
+  "Lenka",
+  "Laura",
+  "Stanislava",
+  "Margaréta",
+  "Dobroslava",
+  "Blanka",
+  "Valéria",
+  "Paulína",
+  "Sidónia",
+  "Adriána",
+  "Beáta",
+  "Petra",
+  "Melánia",
+  "Diana",
+  "Berta",
+  "Patrícia",
+  "Lujza",
+  "Amália",
+  "Milota",
+  "Nina",
+  "Margita",
+  "Kamila",
+  "Dušana",
+  "Magdaléna",
+  "Oľga",
+  "Anna",
+  "Hana",
+  "Božena",
+  "Marta",
+  "Libuša",
+  "Božidara",
+  "Dominika",
+  "Hortenzia",
+  "Jozefína",
+  "Štefánia",
+  "Ľubomíra",
+  "Zuzana",
+  "Darina",
+  "Marcela",
+  "Milica",
+  "Elena",
+  "Helena",
+  "Lýdia",
+  "Anabela",
+  "Jana",
+  "Silvia",
+  "Nikola",
+  "Ružena",
+  "Nora",
+  "Drahoslava",
+  "Linda",
+  "Melinda",
+  "Rebeka",
+  "Rozália",
+  "Regína",
+  "Alica",
+  "Marianna",
+  "Miriama",
+  "Martina",
+  "Mária",
+  "Jolana",
+  "Ľudomila",
+  "Ľudmila",
+  "Olympia",
+  "Eugénia",
+  "Ľuboslava",
+  "Zdenka",
+  "Edita",
+  "Michaela",
+  "Stela",
+  "Viera",
+  "Natália",
+  "Eliška",
+  "Brigita",
+  "Valentína",
+  "Terézia",
+  "Vladimíra",
+  "Hedviga",
+  "Uršuľa",
+  "Alojza",
+  "Kvetoslava",
+  "Sabína",
+  "Dobromila",
+  "Klára",
+  "Simona",
+  "Aurélia",
+  "Denisa",
+  "Renáta",
+  "Irma",
+  "Agnesa",
+  "Klaudia",
+  "Alžbeta",
+  "Elvíra",
+  "Cecília",
+  "Emília",
+  "Katarína",
+  "Henrieta",
+  "Bibiána",
+  "Barbora",
+  "Marína",
+  "Izabela",
+  "Hilda",
+  "Otília",
+  "Lucia",
+  "Branislava",
+  "Bronislava",
+  "Ivica",
+  "Albína",
+  "Kornélia",
+  "Sláva",
+  "Slávka",
+  "Judita",
+  "Dagmara",
+  "Adela",
+  "Nadežda",
+  "Eva",
+  "Filoména",
+  "Ivana",
+  "Milada"
+];
+
+},{}],788:[function(require,module,exports){
+module["exports"] = [
+  "Antalová",
+  "Babková",
+  "Bahnová",
+  "Balážová",
+  "Baranová",
+  "Baranková",
+  "Bartovičová",
+  "Bartošová",
+  "Bačová",
+  "Bernoláková",
+  "Beňová",
+  "Biceková",
+  "Bieliková",
+  "Blahová",
+  "Bondrová",
+  "Bosáková",
+  "Bošková",
+  "Brezinová",
+  "Bukovská",
+  "Chalupková",
+  "Chudíková",
+  "Cibulová",
+  "Cibulková",
+  "Cyprichová",
+  "Cígerová",
+  "Danková",
+  "Daňková",
+  "Daňová",
+  "Debnárová",
+  "Dejová",
+  "Dekýšová",
+  "Doležalová",
+  "Dočolomanská",
+  "Droppová",
+  "Dubovská",
+  "Dudeková",
+  "Dulová",
+  "Dullová",
+  "Dusíková",
+  "Dvončová",
+  "Dzurjaninová",
+  "Dávidová",
+  "Fabianová",
+  "Fabiánová",
+  "Fajnorová",
+  "Farkašovská",
+  "Ficová",
+  "Filcová",
+  "Filipová",
+  "Finková",
+  "Ftoreková",
+  "Gašparová",
+  "Gašparovičová",
+  "Gocníková",
+  "Gregorová",
+  "Gregušová",
+  "Grznárová",
+  "Habláková",
+  "Habšudová",
+  "Haldová",
+  "Halušková",
+  "Haláková",
+  "Hanková",
+  "Hanzalová",
+  "Haščáková",
+  "Heretiková",
+  "Hečková",
+  "Hlaváčeková",
+  "Hlinková",
+  "Holubová",
+  "Holubyová",
+  "Hossová",
+  "Hozová",
+  "Hrašková",
+  "Hricová",
+  "Hrmová",
+  "Hrušovská",
+  "Hubová",
+  "Ihnačáková",
+  "Janečeková",
+  "Janošková",
+  "Jantošovičová",
+  "Janíková",
+  "Jančeková",
+  "Jedľovská",
+  "Jendeková",
+  "Jonatová",
+  "Jurinová",
+  "Jurkovičová",
+  "Juríková",
+  "Jánošíková",
+  "Kafendová",
+  "Kaliská",
+  "Karulová",
+  "Kenížová",
+  "Klapková",
+  "Kmeťová",
+  "Kolesárová",
+  "Kollárová",
+  "Kolniková",
+  "Kolníková",
+  "Kolárová",
+  "Korecová",
+  "Kostkaová",
+  "Kostrecová",
+  "Kováčová",
+  "Kováčiková",
+  "Kozová",
+  "Kočišová",
+  "Krajíčeková",
+  "Krajčová",
+  "Krajčovičová",
+  "Krajčírová",
+  "Králiková",
+  "Krúpová",
+  "Kubíková",
+  "Kyseľová",
+  "Kállayová",
+  "Labudová",
+  "Lepšíková",
+  "Liptáková",
+  "Lisická",
+  "Lubinová",
+  "Lukáčová",
+  "Luptáková",
+  "Líšková",
+  "Madejová",
+  "Majeská",
+  "Malachovská",
+  "Malíšeková",
+  "Mamojková",
+  "Marcinková",
+  "Mariánová",
+  "Masaryková",
+  "Maslová",
+  "Matiašková",
+  "Medveďová",
+  "Melcerová",
+  "Mečiarová",
+  "Michalíková",
+  "Mihaliková",
+  "Mihálová",
+  "Miháliková",
+  "Miklošková",
+  "Mikulíková",
+  "Mikušová",
+  "Mikúšová",
+  "Milotová",
+  "Mináčová",
+  "Mišíková",
+  "Mojžišová",
+  "Mokrošová",
+  "Morová",
+  "Moravčíková",
+  "Mydlová",
+  "Nemcová",
+  "Nováková",
+  "Obšutová",
+  "Ondrušová",
+  "Otčenášová",
+  "Pauková",
+  "Pavlikovská",
+  "Pavúková",
+  "Pašeková",
+  "Pašková",
+  "Pelikánová",
+  "Petrovická",
+  "Petrušková",
+  "Pešková",
+  "Plchová",
+  "Plekanecová",
+  "Podhradská",
+  "Podkonická",
+  "Poliaková",
+  "Pupáková",
+  "Raková",
+  "Repiská",
+  "Romančíková",
+  "Rusová",
+  "Ružičková",
+  "Rybníčeková",
+  "Rybárová",
+  "Rybáriková",
+  "Samsonová",
+  "Sedliaková",
+  "Senková",
+  "Sklenková",
+  "Skokanová",
+  "Skutecká",
+  "Slašťanová",
+  "Slobodová",
+  "Slobodníková",
+  "Slotová",
+  "Slováková",
+  "Smreková",
+  "Stodolová",
+  "Straková",
+  "Strnisková",
+  "Svrbíková",
+  "Sámelová",
+  "Sýkorová",
+  "Tatarová",
+  "Tatarková",
+  "Tatárová",
+  "Tatárkaová",
+  "Thomková",
+  "Tomečeková",
+  "Tomková",
+  "Trubenová",
+  "Turčoková",
+  "Uramová",
+  "Urblíková",
+  "Vajcíková",
+  "Vajdová",
+  "Valachová",
+  "Valachovičová",
+  "Valentová",
+  "Valušková",
+  "Vaneková",
+  "Veselová",
+  "Vicenová",
+  "Višňovská",
+  "Vlachová",
+  "Vojteková",
+  "Vydarená",
+  "Zajacová",
+  "Zimová",
+  "Zimková",
+  "Záborská",
+  "Zúbriková",
+  "Čapkovičová",
+  "Čaplovičová",
+  "Čarnogurská",
+  "Čierná",
+  "Čobrdová",
+  "Ďaďová",
+  "Ďuricová",
+  "Ďurišová",
+  "Šidlová",
+  "Šimonovičová",
+  "Škriniarová",
+  "Škultétyová",
+  "Šmajdová",
+  "Šoltésová",
+  "Šoltýsová",
+  "Štefanová",
+  "Štefanková",
+  "Šulcová",
+  "Šurková",
+  "Švehlová",
+  "Šťastná"
+];
+
+},{}],789:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
-name.man_first_name = require("./man_first_name");
-name.woman_first_name = require("./woman_first_name");
-name.man_last_name = require("./man_last_name");
-name.woman_last_name = require("./woman_last_name");
+name.male_first_name = require("./male_first_name");
+name.female_first_name = require("./female_first_name");
+name.male_last_name = require("./male_last_name");
+name.female_last_name = require("./female_last_name");
 name.prefix = require("./prefix");
 name.suffix = require("./suffix");
 name.title = require("./title");
 name.name = require("./name");
 
-},{"./man_first_name":767,"./man_last_name":768,"./name":769,"./prefix":770,"./suffix":771,"./title":772,"./woman_first_name":773,"./woman_last_name":774}],767:[function(require,module,exports){
+},{"./female_first_name":787,"./female_last_name":788,"./male_first_name":790,"./male_last_name":791,"./name":792,"./prefix":793,"./suffix":794,"./title":795}],790:[function(require,module,exports){
 module["exports"] = [
   "Drahoslav",
   "Severín",
@@ -40195,7 +49602,7 @@ module["exports"] = [
   "Silvester"
 ];
 
-},{}],768:[function(require,module,exports){
+},{}],791:[function(require,module,exports){
 module["exports"] = [
   "Antal",
   "Babka",
@@ -40456,7 +49863,7 @@ module["exports"] = [
   "Šťastný"
 ];
 
-},{}],769:[function(require,module,exports){
+},{}],792:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{man_first_name} #{man_last_name}",
   "#{prefix} #{woman_first_name} #{woman_last_name}",
@@ -40470,7 +49877,7 @@ module["exports"] = [
   "#{woman_first_name} #{woman_last_name}"
 ];
 
-},{}],770:[function(require,module,exports){
+},{}],793:[function(require,module,exports){
 module["exports"] = [
   "Ing.",
   "Mgr.",
@@ -40478,473 +49885,14 @@ module["exports"] = [
   "MUDr."
 ];
 
-},{}],771:[function(require,module,exports){
+},{}],794:[function(require,module,exports){
 module["exports"] = [
   "Phd."
 ];
 
-},{}],772:[function(require,module,exports){
-arguments[4][197][0].apply(exports,arguments)
-},{"dup":197}],773:[function(require,module,exports){
-module["exports"] = [
-  "Alexandra",
-  "Karina",
-  "Daniela",
-  "Andrea",
-  "Antónia",
-  "Bohuslava",
-  "Dáša",
-  "Malvína",
-  "Kristína",
-  "Nataša",
-  "Bohdana",
-  "Drahomíra",
-  "Sára",
-  "Zora",
-  "Tamara",
-  "Ema",
-  "Tatiana",
-  "Erika",
-  "Veronika",
-  "Agáta",
-  "Dorota",
-  "Vanda",
-  "Zoja",
-  "Gabriela",
-  "Perla",
-  "Ida",
-  "Liana",
-  "Miloslava",
-  "Vlasta",
-  "Lívia",
-  "Eleonóra",
-  "Etela",
-  "Romana",
-  "Zlatica",
-  "Anežka",
-  "Bohumila",
-  "Františka",
-  "Angela",
-  "Matilda",
-  "Svetlana",
-  "Ľubica",
-  "Alena",
-  "Soňa",
-  "Vieroslava",
-  "Zita",
-  "Miroslava",
-  "Irena",
-  "Milena",
-  "Estera",
-  "Justína",
-  "Dana",
-  "Danica",
-  "Jela",
-  "Jaroslava",
-  "Jarmila",
-  "Lea",
-  "Anastázia",
-  "Galina",
-  "Lesana",
-  "Hermína",
-  "Monika",
-  "Ingrida",
-  "Viktória",
-  "Blažena",
-  "Žofia",
-  "Sofia",
-  "Gizela",
-  "Viola",
-  "Gertrúda",
-  "Zina",
-  "Júlia",
-  "Juliana",
-  "Želmíra",
-  "Ela",
-  "Vanesa",
-  "Iveta",
-  "Vilma",
-  "Petronela",
-  "Žaneta",
-  "Xénia",
-  "Karolína",
-  "Lenka",
-  "Laura",
-  "Stanislava",
-  "Margaréta",
-  "Dobroslava",
-  "Blanka",
-  "Valéria",
-  "Paulína",
-  "Sidónia",
-  "Adriána",
-  "Beáta",
-  "Petra",
-  "Melánia",
-  "Diana",
-  "Berta",
-  "Patrícia",
-  "Lujza",
-  "Amália",
-  "Milota",
-  "Nina",
-  "Margita",
-  "Kamila",
-  "Dušana",
-  "Magdaléna",
-  "Oľga",
-  "Anna",
-  "Hana",
-  "Božena",
-  "Marta",
-  "Libuša",
-  "Božidara",
-  "Dominika",
-  "Hortenzia",
-  "Jozefína",
-  "Štefánia",
-  "Ľubomíra",
-  "Zuzana",
-  "Darina",
-  "Marcela",
-  "Milica",
-  "Elena",
-  "Helena",
-  "Lýdia",
-  "Anabela",
-  "Jana",
-  "Silvia",
-  "Nikola",
-  "Ružena",
-  "Nora",
-  "Drahoslava",
-  "Linda",
-  "Melinda",
-  "Rebeka",
-  "Rozália",
-  "Regína",
-  "Alica",
-  "Marianna",
-  "Miriama",
-  "Martina",
-  "Mária",
-  "Jolana",
-  "Ľudomila",
-  "Ľudmila",
-  "Olympia",
-  "Eugénia",
-  "Ľuboslava",
-  "Zdenka",
-  "Edita",
-  "Michaela",
-  "Stela",
-  "Viera",
-  "Natália",
-  "Eliška",
-  "Brigita",
-  "Valentína",
-  "Terézia",
-  "Vladimíra",
-  "Hedviga",
-  "Uršuľa",
-  "Alojza",
-  "Kvetoslava",
-  "Sabína",
-  "Dobromila",
-  "Klára",
-  "Simona",
-  "Aurélia",
-  "Denisa",
-  "Renáta",
-  "Irma",
-  "Agnesa",
-  "Klaudia",
-  "Alžbeta",
-  "Elvíra",
-  "Cecília",
-  "Emília",
-  "Katarína",
-  "Henrieta",
-  "Bibiána",
-  "Barbora",
-  "Marína",
-  "Izabela",
-  "Hilda",
-  "Otília",
-  "Lucia",
-  "Branislava",
-  "Bronislava",
-  "Ivica",
-  "Albína",
-  "Kornélia",
-  "Sláva",
-  "Slávka",
-  "Judita",
-  "Dagmara",
-  "Adela",
-  "Nadežda",
-  "Eva",
-  "Filoména",
-  "Ivana",
-  "Milada"
-];
-
-},{}],774:[function(require,module,exports){
-module["exports"] = [
-  "Antalová",
-  "Babková",
-  "Bahnová",
-  "Balážová",
-  "Baranová",
-  "Baranková",
-  "Bartovičová",
-  "Bartošová",
-  "Bačová",
-  "Bernoláková",
-  "Beňová",
-  "Biceková",
-  "Bieliková",
-  "Blahová",
-  "Bondrová",
-  "Bosáková",
-  "Bošková",
-  "Brezinová",
-  "Bukovská",
-  "Chalupková",
-  "Chudíková",
-  "Cibulová",
-  "Cibulková",
-  "Cyprichová",
-  "Cígerová",
-  "Danková",
-  "Daňková",
-  "Daňová",
-  "Debnárová",
-  "Dejová",
-  "Dekýšová",
-  "Doležalová",
-  "Dočolomanská",
-  "Droppová",
-  "Dubovská",
-  "Dudeková",
-  "Dulová",
-  "Dullová",
-  "Dusíková",
-  "Dvončová",
-  "Dzurjaninová",
-  "Dávidová",
-  "Fabianová",
-  "Fabiánová",
-  "Fajnorová",
-  "Farkašovská",
-  "Ficová",
-  "Filcová",
-  "Filipová",
-  "Finková",
-  "Ftoreková",
-  "Gašparová",
-  "Gašparovičová",
-  "Gocníková",
-  "Gregorová",
-  "Gregušová",
-  "Grznárová",
-  "Habláková",
-  "Habšudová",
-  "Haldová",
-  "Halušková",
-  "Haláková",
-  "Hanková",
-  "Hanzalová",
-  "Haščáková",
-  "Heretiková",
-  "Hečková",
-  "Hlaváčeková",
-  "Hlinková",
-  "Holubová",
-  "Holubyová",
-  "Hossová",
-  "Hozová",
-  "Hrašková",
-  "Hricová",
-  "Hrmová",
-  "Hrušovská",
-  "Hubová",
-  "Ihnačáková",
-  "Janečeková",
-  "Janošková",
-  "Jantošovičová",
-  "Janíková",
-  "Jančeková",
-  "Jedľovská",
-  "Jendeková",
-  "Jonatová",
-  "Jurinová",
-  "Jurkovičová",
-  "Juríková",
-  "Jánošíková",
-  "Kafendová",
-  "Kaliská",
-  "Karulová",
-  "Kenížová",
-  "Klapková",
-  "Kmeťová",
-  "Kolesárová",
-  "Kollárová",
-  "Kolniková",
-  "Kolníková",
-  "Kolárová",
-  "Korecová",
-  "Kostkaová",
-  "Kostrecová",
-  "Kováčová",
-  "Kováčiková",
-  "Kozová",
-  "Kočišová",
-  "Krajíčeková",
-  "Krajčová",
-  "Krajčovičová",
-  "Krajčírová",
-  "Králiková",
-  "Krúpová",
-  "Kubíková",
-  "Kyseľová",
-  "Kállayová",
-  "Labudová",
-  "Lepšíková",
-  "Liptáková",
-  "Lisická",
-  "Lubinová",
-  "Lukáčová",
-  "Luptáková",
-  "Líšková",
-  "Madejová",
-  "Majeská",
-  "Malachovská",
-  "Malíšeková",
-  "Mamojková",
-  "Marcinková",
-  "Mariánová",
-  "Masaryková",
-  "Maslová",
-  "Matiašková",
-  "Medveďová",
-  "Melcerová",
-  "Mečiarová",
-  "Michalíková",
-  "Mihaliková",
-  "Mihálová",
-  "Miháliková",
-  "Miklošková",
-  "Mikulíková",
-  "Mikušová",
-  "Mikúšová",
-  "Milotová",
-  "Mináčová",
-  "Mišíková",
-  "Mojžišová",
-  "Mokrošová",
-  "Morová",
-  "Moravčíková",
-  "Mydlová",
-  "Nemcová",
-  "Nováková",
-  "Obšutová",
-  "Ondrušová",
-  "Otčenášová",
-  "Pauková",
-  "Pavlikovská",
-  "Pavúková",
-  "Pašeková",
-  "Pašková",
-  "Pelikánová",
-  "Petrovická",
-  "Petrušková",
-  "Pešková",
-  "Plchová",
-  "Plekanecová",
-  "Podhradská",
-  "Podkonická",
-  "Poliaková",
-  "Pupáková",
-  "Raková",
-  "Repiská",
-  "Romančíková",
-  "Rusová",
-  "Ružičková",
-  "Rybníčeková",
-  "Rybárová",
-  "Rybáriková",
-  "Samsonová",
-  "Sedliaková",
-  "Senková",
-  "Sklenková",
-  "Skokanová",
-  "Skutecká",
-  "Slašťanová",
-  "Slobodová",
-  "Slobodníková",
-  "Slotová",
-  "Slováková",
-  "Smreková",
-  "Stodolová",
-  "Straková",
-  "Strnisková",
-  "Svrbíková",
-  "Sámelová",
-  "Sýkorová",
-  "Tatarová",
-  "Tatarková",
-  "Tatárová",
-  "Tatárkaová",
-  "Thomková",
-  "Tomečeková",
-  "Tomková",
-  "Trubenová",
-  "Turčoková",
-  "Uramová",
-  "Urblíková",
-  "Vajcíková",
-  "Vajdová",
-  "Valachová",
-  "Valachovičová",
-  "Valentová",
-  "Valušková",
-  "Vaneková",
-  "Veselová",
-  "Vicenová",
-  "Višňovská",
-  "Vlachová",
-  "Vojteková",
-  "Vydarená",
-  "Zajacová",
-  "Zimová",
-  "Zimková",
-  "Záborská",
-  "Zúbriková",
-  "Čapkovičová",
-  "Čaplovičová",
-  "Čarnogurská",
-  "Čierná",
-  "Čobrdová",
-  "Ďaďová",
-  "Ďuricová",
-  "Ďurišová",
-  "Šidlová",
-  "Šimonovičová",
-  "Škriniarová",
-  "Škultétyová",
-  "Šmajdová",
-  "Šoltésová",
-  "Šoltýsová",
-  "Štefanová",
-  "Štefanková",
-  "Šulcová",
-  "Šurková",
-  "Švehlová",
-  "Šťastná"
-];
-
-},{}],775:[function(require,module,exports){
+},{}],795:[function(require,module,exports){
+arguments[4][184][0].apply(exports,arguments)
+},{"dup":184}],796:[function(require,module,exports){
 module["exports"] = [
   "09## ### ###",
   "0## #### ####",
@@ -40952,16 +49900,16 @@ module["exports"] = [
   "+421 ### ### ###"
 ];
 
-},{}],776:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":775,"dup":74}],777:[function(require,module,exports){
-arguments[4][441][0].apply(exports,arguments)
-},{"dup":441}],778:[function(require,module,exports){
+},{}],797:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":796,"dup":55}],798:[function(require,module,exports){
+arguments[4][431][0].apply(exports,arguments)
+},{"dup":431}],799:[function(require,module,exports){
 module["exports"] = [
   "#{city_prefix}#{city_suffix}"
 ];
 
-},{}],779:[function(require,module,exports){
+},{}],800:[function(require,module,exports){
 module["exports"] = [
   "Söder",
   "Norr",
@@ -40990,7 +49938,7 @@ module["exports"] = [
   "Ny"
 ];
 
-},{}],780:[function(require,module,exports){
+},{}],801:[function(require,module,exports){
 module["exports"] = [
   "stad",
   "land",
@@ -41013,13 +49961,13 @@ module["exports"] = [
   "vik"
 ];
 
-},{}],781:[function(require,module,exports){
+},{}],802:[function(require,module,exports){
 module["exports"] = [
   "s Väg",
   "s Gata"
 ];
 
-},{}],782:[function(require,module,exports){
+},{}],803:[function(require,module,exports){
 module["exports"] = [
   "Ryssland",
   "Kanada",
@@ -41228,12 +50176,12 @@ module["exports"] = [
   "Vatikanstaten"
 ];
 
-},{}],783:[function(require,module,exports){
+},{}],804:[function(require,module,exports){
 module["exports"] = [
   "Sverige"
 ];
 
-},{}],784:[function(require,module,exports){
+},{}],805:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -41252,15 +50200,15 @@ address.secondary_address = require("./secondary_address");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":777,"./city":778,"./city_prefix":779,"./city_suffix":780,"./common_street_suffix":781,"./country":782,"./default_country":783,"./postcode":785,"./secondary_address":786,"./state":787,"./street_address":788,"./street_name":789,"./street_prefix":790,"./street_root":791,"./street_suffix":792}],785:[function(require,module,exports){
-arguments[4][309][0].apply(exports,arguments)
-},{"dup":309}],786:[function(require,module,exports){
+},{"./building_number":798,"./city":799,"./city_prefix":800,"./city_suffix":801,"./common_street_suffix":802,"./country":803,"./default_country":804,"./postcode":806,"./secondary_address":807,"./state":808,"./street_address":809,"./street_name":810,"./street_prefix":811,"./street_root":812,"./street_suffix":813}],806:[function(require,module,exports){
+arguments[4][299][0].apply(exports,arguments)
+},{"dup":299}],807:[function(require,module,exports){
 module["exports"] = [
   "Lgh. ###",
   "Hus ###"
 ];
 
-},{}],787:[function(require,module,exports){
+},{}],808:[function(require,module,exports){
 module["exports"] = [
   "Blekinge",
   "Dalarna",
@@ -41287,11 +50235,11 @@ module["exports"] = [
   "Östergötland"
 ];
 
-},{}],788:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],789:[function(require,module,exports){
-arguments[4][562][0].apply(exports,arguments)
-},{"dup":562}],790:[function(require,module,exports){
+},{}],809:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],810:[function(require,module,exports){
+arguments[4][583][0].apply(exports,arguments)
+},{"dup":583}],811:[function(require,module,exports){
 module["exports"] = [
   "Västra",
   "Östra",
@@ -41301,7 +50249,7 @@ module["exports"] = [
   "Undre"
 ];
 
-},{}],791:[function(require,module,exports){
+},{}],812:[function(require,module,exports){
 module["exports"] = [
   "Björk",
   "Järnvägs",
@@ -41333,7 +50281,7 @@ module["exports"] = [
   "Asp"
 ];
 
-},{}],792:[function(require,module,exports){
+},{}],813:[function(require,module,exports){
 module["exports"] = [
   "vägen",
   "gatan",
@@ -41342,25 +50290,25 @@ module["exports"] = [
   "allén"
 ];
 
-},{}],793:[function(require,module,exports){
+},{}],814:[function(require,module,exports){
 module["exports"] = [
   56,
   62,
   59
 ];
 
-},{}],794:[function(require,module,exports){
+},{}],815:[function(require,module,exports){
 module["exports"] = [
   "#{common_cell_prefix}-###-####"
 ];
 
-},{}],795:[function(require,module,exports){
+},{}],816:[function(require,module,exports){
 var cell_phone = {};
 module['exports'] = cell_phone;
 cell_phone.common_cell_prefix = require("./common_cell_prefix");
 cell_phone.formats = require("./formats");
 
-},{"./common_cell_prefix":793,"./formats":794}],796:[function(require,module,exports){
+},{"./common_cell_prefix":814,"./formats":815}],817:[function(require,module,exports){
 module["exports"] = [
   "vit",
   "silver",
@@ -41379,7 +50327,7 @@ module["exports"] = [
   "korall"
 ];
 
-},{}],797:[function(require,module,exports){
+},{}],818:[function(require,module,exports){
 module["exports"] = [
   "Böcker",
   "Filmer",
@@ -41400,9 +50348,9 @@ module["exports"] = [
   "Sport"
 ];
 
-},{}],798:[function(require,module,exports){
-arguments[4][148][0].apply(exports,arguments)
-},{"./color":796,"./department":797,"./product_name":799,"dup":148}],799:[function(require,module,exports){
+},{}],819:[function(require,module,exports){
+arguments[4][134][0].apply(exports,arguments)
+},{"./color":817,"./department":818,"./product_name":820,"dup":134}],820:[function(require,module,exports){
 module["exports"] = {
   "adjective": [
     "Liten",
@@ -41440,16 +50388,16 @@ module["exports"] = {
   ]
 };
 
-},{}],800:[function(require,module,exports){
-arguments[4][110][0].apply(exports,arguments)
-},{"./name":801,"./suffix":802,"dup":110}],801:[function(require,module,exports){
+},{}],821:[function(require,module,exports){
+arguments[4][91][0].apply(exports,arguments)
+},{"./name":822,"./suffix":823,"dup":91}],822:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name} #{suffix}",
   "#{Name.last_name}-#{Name.last_name}",
   "#{Name.last_name}, #{Name.last_name} #{suffix}"
 ];
 
-},{}],802:[function(require,module,exports){
+},{}],823:[function(require,module,exports){
 module["exports"] = [
   "Gruppen",
   "AB",
@@ -41460,7 +50408,65 @@ module["exports"] = [
   "Aktiebolag"
 ];
 
-},{}],803:[function(require,module,exports){
+},{}],824:[function(require,module,exports){
+arguments[4][156][0].apply(exports,arguments)
+},{"./month":825,"./weekday":826,"dup":156}],825:[function(require,module,exports){
+// Source: http://unicode.org/cldr/trac/browser/tags/release-27/common/main/en.xml#L1799
+module["exports"] = {
+  wide: [
+    "januari",
+    "februari",
+    "mars",
+    "april",
+    "maj",
+    "juni",
+    "juli",
+    "augusti",
+    "september",
+    "oktober",
+    "november",
+    "december"
+  ],
+  abbr: [
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "maj",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "okt",
+    "nov",
+    "dec"
+  ]
+};
+
+},{}],826:[function(require,module,exports){
+// Source: http://unicode.org/cldr/trac/browser/tags/release-27/common/main/en.xml#L1847
+module["exports"] = {
+  wide: [
+    "söndag",
+    "måndag",
+    "tisdag",
+    "onsdag",
+    "torsdag",
+    "fredag",
+    "lördag"
+  ],
+  abbr: [
+    "sön",
+    "mån",
+    "tis",
+    "ons",
+    "tor",
+    "fre",
+    "lör"
+  ]
+};
+
+},{}],827:[function(require,module,exports){
 var sv = {};
 module['exports'] = sv;
 sv.title = "Swedish";
@@ -41472,8 +50478,9 @@ sv.phone_number = require("./phone_number");
 sv.cell_phone = require("./cell_phone");
 sv.commerce = require("./commerce");
 sv.team = require("./team");
+sv.date = require("./date");
 
-},{"./address":784,"./cell_phone":795,"./commerce":798,"./company":800,"./internet":805,"./name":808,"./phone_number":814,"./team":815}],804:[function(require,module,exports){
+},{"./address":805,"./cell_phone":816,"./commerce":819,"./company":821,"./date":824,"./internet":829,"./name":832,"./phone_number":838,"./team":839}],828:[function(require,module,exports){
 module["exports"] = [
   "se",
   "nu",
@@ -41482,9 +50489,9 @@ module["exports"] = [
   "org"
 ];
 
-},{}],805:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":804,"dup":115}],806:[function(require,module,exports){
+},{}],829:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":828,"dup":96}],830:[function(require,module,exports){
 module["exports"] = [
   "Erik",
   "Lars",
@@ -41498,7 +50505,7 @@ module["exports"] = [
   "Hans"
 ];
 
-},{}],807:[function(require,module,exports){
+},{}],831:[function(require,module,exports){
 module["exports"] = [
   "Maria",
   "Anna",
@@ -41512,7 +50519,7 @@ module["exports"] = [
   "Marie"
 ];
 
-},{}],808:[function(require,module,exports){
+},{}],832:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name_women = require("./first_name_women");
@@ -41522,7 +50529,7 @@ name.prefix = require("./prefix");
 name.title = require("./title");
 name.name = require("./name");
 
-},{"./first_name_men":806,"./first_name_women":807,"./last_name":809,"./name":810,"./prefix":811,"./title":812}],809:[function(require,module,exports){
+},{"./first_name_men":830,"./first_name_women":831,"./last_name":833,"./name":834,"./prefix":835,"./title":836}],833:[function(require,module,exports){
 module["exports"] = [
   "Johansson",
   "Andersson",
@@ -41536,7 +50543,7 @@ module["exports"] = [
   "Gustafsson"
 ];
 
-},{}],810:[function(require,module,exports){
+},{}],834:[function(require,module,exports){
 module["exports"] = [
   "#{first_name_women} #{last_name}",
   "#{first_name_men} #{last_name}",
@@ -41548,35 +50555,35 @@ module["exports"] = [
   "#{prefix} #{first_name_women} #{last_name}"
 ];
 
-},{}],811:[function(require,module,exports){
+},{}],835:[function(require,module,exports){
 module["exports"] = [
   "Dr.",
   "Prof.",
   "PhD."
 ];
 
-},{}],812:[function(require,module,exports){
-arguments[4][197][0].apply(exports,arguments)
-},{"dup":197}],813:[function(require,module,exports){
+},{}],836:[function(require,module,exports){
+arguments[4][184][0].apply(exports,arguments)
+},{"dup":184}],837:[function(require,module,exports){
 module["exports"] = [
   "####-#####",
   "####-######"
 ];
 
-},{}],814:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":813,"dup":74}],815:[function(require,module,exports){
+},{}],838:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":837,"dup":55}],839:[function(require,module,exports){
 var team = {};
 module['exports'] = team;
 team.suffix = require("./suffix");
 team.name = require("./name");
 
-},{"./name":816,"./suffix":817}],816:[function(require,module,exports){
+},{"./name":840,"./suffix":841}],840:[function(require,module,exports){
 module["exports"] = [
   "#{Address.city} #{suffix}"
 ];
 
-},{}],817:[function(require,module,exports){
+},{}],841:[function(require,module,exports){
 module["exports"] = [
   "IF",
   "FF",
@@ -41593,9 +50600,9 @@ module["exports"] = [
   "IK"
 ];
 
-},{}],818:[function(require,module,exports){
-arguments[4][41][0].apply(exports,arguments)
-},{"dup":41}],819:[function(require,module,exports){
+},{}],842:[function(require,module,exports){
+arguments[4][22][0].apply(exports,arguments)
+},{"dup":22}],843:[function(require,module,exports){
 module["exports"] = [
   "Adana",
   "Adıyaman",
@@ -41680,7 +50687,7 @@ module["exports"] = [
   "Düzce"
 ];
 
-},{}],820:[function(require,module,exports){
+},{}],844:[function(require,module,exports){
 module["exports"] = [
   "Afganistan",
   "Almanya",
@@ -41920,12 +50927,12 @@ module["exports"] = [
   "Zimbabve"
 ];
 
-},{}],821:[function(require,module,exports){
+},{}],845:[function(require,module,exports){
 module["exports"] = [
   "Türkiye"
 ];
 
-},{}],822:[function(require,module,exports){
+},{}],846:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city = require("./city");
@@ -41937,13 +50944,13 @@ address.building_number = require("./building_number");
 address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 
-},{"./building_number":818,"./city":819,"./country":820,"./default_country":821,"./postcode":823,"./street_address":824,"./street_name":825,"./street_root":826}],823:[function(require,module,exports){
-arguments[4][309][0].apply(exports,arguments)
-},{"dup":309}],824:[function(require,module,exports){
-arguments[4][52][0].apply(exports,arguments)
-},{"dup":52}],825:[function(require,module,exports){
-arguments[4][53][0].apply(exports,arguments)
-},{"dup":53}],826:[function(require,module,exports){
+},{"./building_number":842,"./city":843,"./country":844,"./default_country":845,"./postcode":847,"./street_address":848,"./street_name":849,"./street_root":850}],847:[function(require,module,exports){
+arguments[4][299][0].apply(exports,arguments)
+},{"dup":299}],848:[function(require,module,exports){
+arguments[4][33][0].apply(exports,arguments)
+},{"dup":33}],849:[function(require,module,exports){
+arguments[4][34][0].apply(exports,arguments)
+},{"dup":34}],850:[function(require,module,exports){
 module["exports"] = [
   "Atatürk Bulvarı",
   "Alparslan Türkeş Bulvarı",
@@ -41988,7 +50995,7 @@ module["exports"] = [
   "Bandak Sokak"
 ];
 
-},{}],827:[function(require,module,exports){
+},{}],851:[function(require,module,exports){
 module["exports"] = [
   "+90-53#-###-##-##",
   "+90-54#-###-##-##",
@@ -41996,9 +51003,9 @@ module["exports"] = [
   "+90-50#-###-##-##"
 ];
 
-},{}],828:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":827,"dup":56}],829:[function(require,module,exports){
+},{}],852:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":851,"dup":37}],853:[function(require,module,exports){
 var tr = {};
 module['exports'] = tr;
 tr.title = "Turkish";
@@ -42009,7 +51016,7 @@ tr.phone_number = require("./phone_number");
 tr.cell_phone = require("./cell_phone");
 tr.name = require("./name");
 
-},{"./address":822,"./cell_phone":828,"./internet":831,"./lorem":832,"./name":835,"./phone_number":841}],830:[function(require,module,exports){
+},{"./address":846,"./cell_phone":852,"./internet":855,"./lorem":856,"./name":859,"./phone_number":865}],854:[function(require,module,exports){
 module["exports"] = [
   "com.tr",
   "com",
@@ -42019,13 +51026,13 @@ module["exports"] = [
   "gov.tr"
 ];
 
-},{}],831:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":830,"dup":115}],832:[function(require,module,exports){
-arguments[4][65][0].apply(exports,arguments)
-},{"./words":833,"dup":65}],833:[function(require,module,exports){
-arguments[4][66][0].apply(exports,arguments)
-},{"dup":66}],834:[function(require,module,exports){
+},{}],855:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":854,"dup":96}],856:[function(require,module,exports){
+arguments[4][46][0].apply(exports,arguments)
+},{"./words":857,"dup":46}],857:[function(require,module,exports){
+arguments[4][47][0].apply(exports,arguments)
+},{"dup":47}],858:[function(require,module,exports){
 module["exports"] = [
   "Aba",
   "Abak",
@@ -42760,15 +51767,9 @@ module["exports"] = [
   "Kızılalma"
 ];
 
-},{}],835:[function(require,module,exports){
-var name = {};
-module['exports'] = name;
-name.first_name = require("./first_name");
-name.last_name = require("./last_name");
-name.prefix = require("./prefix");
-name.name = require("./name");
-
-},{"./first_name":834,"./last_name":836,"./name":837,"./prefix":838}],836:[function(require,module,exports){
+},{}],859:[function(require,module,exports){
+arguments[4][98][0].apply(exports,arguments)
+},{"./first_name":858,"./last_name":860,"./name":861,"./prefix":862,"dup":98}],860:[function(require,module,exports){
 module["exports"] = [
   "Abacı",
   "Abadan",
@@ -42970,9 +51971,9 @@ module["exports"] = [
   "Öztuna"
 ];
 
-},{}],837:[function(require,module,exports){
-arguments[4][468][0].apply(exports,arguments)
-},{"dup":468}],838:[function(require,module,exports){
+},{}],861:[function(require,module,exports){
+arguments[4][458][0].apply(exports,arguments)
+},{"dup":458}],862:[function(require,module,exports){
 module["exports"] = [
   "Bay",
   "Bayan",
@@ -42980,7 +51981,7 @@ module["exports"] = [
   "Prof. Dr."
 ];
 
-},{}],839:[function(require,module,exports){
+},{}],863:[function(require,module,exports){
 module["exports"] = [
   "392",
   "510",
@@ -43081,27 +52082,27 @@ module["exports"] = [
   "372"
 ];
 
-},{}],840:[function(require,module,exports){
+},{}],864:[function(require,module,exports){
 module["exports"] = [
   "+90-###-###-##-##",
   "+90-###-###-#-###"
 ];
 
-},{}],841:[function(require,module,exports){
+},{}],865:[function(require,module,exports){
 var phone_number = {};
 module['exports'] = phone_number;
 phone_number.area_code = require("./area_code");
 phone_number.formats = require("./formats");
 
-},{"./area_code":839,"./formats":840}],842:[function(require,module,exports){
-arguments[4][735][0].apply(exports,arguments)
-},{"dup":735}],843:[function(require,module,exports){
+},{"./area_code":863,"./formats":864}],866:[function(require,module,exports){
+arguments[4][756][0].apply(exports,arguments)
+},{"dup":756}],867:[function(require,module,exports){
 module["exports"] = [
   "#{city_name}",
   "#{city_prefix} #{Name.male_first_name}"
 ];
 
-},{}],844:[function(require,module,exports){
+},{}],868:[function(require,module,exports){
 module["exports"] = [
   "Алчевськ",
   "Артемівськ",
@@ -43162,7 +52163,7 @@ module["exports"] = [
   "Ялта"
 ];
 
-},{}],845:[function(require,module,exports){
+},{}],869:[function(require,module,exports){
 module["exports"] = [
   "Південний",
   "Північний",
@@ -43170,12 +52171,12 @@ module["exports"] = [
   "Західний"
 ];
 
-},{}],846:[function(require,module,exports){
+},{}],870:[function(require,module,exports){
 module["exports"] = [
   "град"
 ];
 
-},{}],847:[function(require,module,exports){
+},{}],871:[function(require,module,exports){
 module["exports"] = [
   "Австралія",
   "Австрія",
@@ -43372,12 +52373,12 @@ module["exports"] = [
   "Японія"
 ];
 
-},{}],848:[function(require,module,exports){
+},{}],872:[function(require,module,exports){
 module["exports"] = [
   "Україна"
 ];
 
-},{}],849:[function(require,module,exports){
+},{}],873:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.country = require("./country");
@@ -43396,11 +52397,11 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":842,"./city":843,"./city_name":844,"./city_prefix":845,"./city_suffix":846,"./country":847,"./default_country":848,"./postcode":850,"./secondary_address":851,"./state":852,"./street_address":853,"./street_name":854,"./street_prefix":855,"./street_suffix":856,"./street_title":857}],850:[function(require,module,exports){
-arguments[4][309][0].apply(exports,arguments)
-},{"dup":309}],851:[function(require,module,exports){
-arguments[4][702][0].apply(exports,arguments)
-},{"dup":702}],852:[function(require,module,exports){
+},{"./building_number":866,"./city":867,"./city_name":868,"./city_prefix":869,"./city_suffix":870,"./country":871,"./default_country":872,"./postcode":874,"./secondary_address":875,"./state":876,"./street_address":877,"./street_name":878,"./street_prefix":879,"./street_suffix":880,"./street_title":881}],874:[function(require,module,exports){
+arguments[4][299][0].apply(exports,arguments)
+},{"dup":299}],875:[function(require,module,exports){
+arguments[4][723][0].apply(exports,arguments)
+},{"dup":723}],876:[function(require,module,exports){
 module["exports"] = [
   "АР Крим",
   "Вінницька область",
@@ -43431,15 +52432,15 @@ module["exports"] = [
   "Севастополь"
 ];
 
-},{}],853:[function(require,module,exports){
-arguments[4][704][0].apply(exports,arguments)
-},{"dup":704}],854:[function(require,module,exports){
+},{}],877:[function(require,module,exports){
+arguments[4][725][0].apply(exports,arguments)
+},{"dup":725}],878:[function(require,module,exports){
 module["exports"] = [
   "#{street_prefix} #{Address.street_title}",
   "#{Address.street_title} #{street_suffix}"
 ];
 
-},{}],855:[function(require,module,exports){
+},{}],879:[function(require,module,exports){
 module["exports"] = [
   "вул.",
   "вулиця",
@@ -43451,12 +52452,12 @@ module["exports"] = [
   "провулок"
 ];
 
-},{}],856:[function(require,module,exports){
+},{}],880:[function(require,module,exports){
 module["exports"] = [
   "майдан"
 ];
 
-},{}],857:[function(require,module,exports){
+},{}],881:[function(require,module,exports){
 module["exports"] = [
   "Зелена",
   "Молодіжна",
@@ -43473,11 +52474,11 @@ module["exports"] = [
   "Коліївщини"
 ];
 
-},{}],858:[function(require,module,exports){
-arguments[4][457][0].apply(exports,arguments)
-},{"./name":859,"./prefix":860,"./suffix":861,"dup":457}],859:[function(require,module,exports){
-arguments[4][713][0].apply(exports,arguments)
-},{"dup":713}],860:[function(require,module,exports){
+},{}],882:[function(require,module,exports){
+arguments[4][447][0].apply(exports,arguments)
+},{"./name":883,"./prefix":884,"./suffix":885,"dup":447}],883:[function(require,module,exports){
+arguments[4][734][0].apply(exports,arguments)
+},{"dup":734}],884:[function(require,module,exports){
 module["exports"] = [
   "ТОВ",
   "ПАТ",
@@ -43489,7 +52490,7 @@ module["exports"] = [
   "ФОП"
 ];
 
-},{}],861:[function(require,module,exports){
+},{}],885:[function(require,module,exports){
 module["exports"] = [
   "Постач",
   "Торг",
@@ -43498,7 +52499,7 @@ module["exports"] = [
   "Збут"
 ];
 
-},{}],862:[function(require,module,exports){
+},{}],886:[function(require,module,exports){
 var uk = {};
 module['exports'] = uk;
 uk.title = "Ukrainian";
@@ -43508,7 +52509,7 @@ uk.internet = require("./internet");
 uk.name = require("./name");
 uk.phone_number = require("./phone_number");
 
-},{"./address":849,"./company":858,"./internet":865,"./name":869,"./phone_number":878}],863:[function(require,module,exports){
+},{"./address":873,"./company":882,"./internet":889,"./name":893,"./phone_number":902}],887:[function(require,module,exports){
 module["exports"] = [
   "cherkassy.ua",
   "cherkasy.ua",
@@ -43572,7 +52573,7 @@ module["exports"] = [
   "укр"
 ];
 
-},{}],864:[function(require,module,exports){
+},{}],888:[function(require,module,exports){
 module["exports"] = [
   "ukr.net",
   "ex.ua",
@@ -43583,9 +52584,9 @@ module["exports"] = [
   "gmail.com"
 ];
 
-},{}],865:[function(require,module,exports){
-arguments[4][64][0].apply(exports,arguments)
-},{"./domain_suffix":863,"./free_email":864,"dup":64}],866:[function(require,module,exports){
+},{}],889:[function(require,module,exports){
+arguments[4][45][0].apply(exports,arguments)
+},{"./domain_suffix":887,"./free_email":888,"dup":45}],890:[function(require,module,exports){
 module["exports"] = [
   "Аврелія",
   "Аврора",
@@ -43782,7 +52783,7 @@ module["exports"] = [
   "Ярослава"
 ];
 
-},{}],867:[function(require,module,exports){
+},{}],891:[function(require,module,exports){
 module["exports"] = [
   "Андрухович",
   "Бабух",
@@ -44016,7 +53017,7 @@ module["exports"] = [
   "Ящук"
 ];
 
-},{}],868:[function(require,module,exports){
+},{}],892:[function(require,module,exports){
 module["exports"] = [
   "Адамівна",
   "Азарівна",
@@ -44136,7 +53137,7 @@ module["exports"] = [
   "Ярославівна"
 ];
 
-},{}],869:[function(require,module,exports){
+},{}],893:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.male_first_name = require("./male_first_name");
@@ -44150,7 +53151,7 @@ name.suffix = require("./suffix");
 name.title = require("./title");
 name.name = require("./name");
 
-},{"./female_first_name":866,"./female_last_name":867,"./female_middle_name":868,"./male_first_name":870,"./male_last_name":871,"./male_middle_name":872,"./name":873,"./prefix":874,"./suffix":875,"./title":876}],870:[function(require,module,exports){
+},{"./female_first_name":890,"./female_last_name":891,"./female_middle_name":892,"./male_first_name":894,"./male_last_name":895,"./male_middle_name":896,"./name":897,"./prefix":898,"./suffix":899,"./title":900}],894:[function(require,module,exports){
 module["exports"] = [
   "Августин",
   "Аврелій",
@@ -44349,7 +53350,7 @@ module["exports"] = [
   "Ярослав"
 ];
 
-},{}],871:[function(require,module,exports){
+},{}],895:[function(require,module,exports){
 module["exports"] = [
   "Андрухович",
   "Бабух",
@@ -44592,7 +53593,7 @@ module["exports"] = [
   "Ящук"
 ];
 
-},{}],872:[function(require,module,exports){
+},{}],896:[function(require,module,exports){
 module["exports"] = [
   "Адамович",
   "Азарович",
@@ -44712,15 +53713,15 @@ module["exports"] = [
   "Ярославович"
 ];
 
-},{}],873:[function(require,module,exports){
-arguments[4][730][0].apply(exports,arguments)
-},{"dup":730}],874:[function(require,module,exports){
+},{}],897:[function(require,module,exports){
+arguments[4][751][0].apply(exports,arguments)
+},{"dup":751}],898:[function(require,module,exports){
 module["exports"] = [
   "Пан",
   "Пані"
 ];
 
-},{}],875:[function(require,module,exports){
+},{}],899:[function(require,module,exports){
 module["exports"] = [
   "проф.",
   "доц.",
@@ -44742,7 +53743,7 @@ module["exports"] = [
   "канд. психол. наук"
 ];
 
-},{}],876:[function(require,module,exports){
+},{}],900:[function(require,module,exports){
 module["exports"] = {
   "descriptor": [
     "Головний",
@@ -44784,7 +53785,7 @@ module["exports"] = {
   ]
 };
 
-},{}],877:[function(require,module,exports){
+},{}],901:[function(require,module,exports){
 module["exports"] = [
   "(044) ###-##-##",
   "(050) ###-##-##",
@@ -44802,14 +53803,14 @@ module["exports"] = [
   "(099) ###-##-##"
 ];
 
-},{}],878:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":877,"dup":74}],879:[function(require,module,exports){
+},{}],902:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":901,"dup":55}],903:[function(require,module,exports){
 module["exports"] = [
   "#{city_root}"
 ];
 
-},{}],880:[function(require,module,exports){
+},{}],904:[function(require,module,exports){
 module["exports"] = [
   "Bắc Giang",
   "Bắc Kạn",
@@ -44876,7 +53877,7 @@ module["exports"] = [
   "Vĩnh Long"
 ];
 
-},{}],881:[function(require,module,exports){
+},{}],905:[function(require,module,exports){
 module["exports"] = [
   "Avon",
   "Bedfordshire",
@@ -44951,12 +53952,12 @@ module["exports"] = [
   "Worcestershire"
 ];
 
-},{}],882:[function(require,module,exports){
+},{}],906:[function(require,module,exports){
 module["exports"] = [
   "Việt Nam"
 ];
 
-},{}],883:[function(require,module,exports){
+},{}],907:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_root = require("./city_root");
@@ -44964,22 +53965,22 @@ address.city = require("./city");
 address.county = require("./county");
 address.default_country = require("./default_country");
 
-},{"./city":879,"./city_root":880,"./county":881,"./default_country":882}],884:[function(require,module,exports){
-arguments[4][238][0].apply(exports,arguments)
-},{"dup":238}],885:[function(require,module,exports){
-arguments[4][56][0].apply(exports,arguments)
-},{"./formats":884,"dup":56}],886:[function(require,module,exports){
+},{"./city":903,"./city_root":904,"./county":905,"./default_country":906}],908:[function(require,module,exports){
+arguments[4][228][0].apply(exports,arguments)
+},{"dup":228}],909:[function(require,module,exports){
+arguments[4][37][0].apply(exports,arguments)
+},{"./formats":908,"dup":37}],910:[function(require,module,exports){
 var company = {};
 module['exports'] = company;
 company.prefix = require("./prefix");
 company.name = require("./name");
 
-},{"./name":887,"./prefix":888}],887:[function(require,module,exports){
+},{"./name":911,"./prefix":912}],911:[function(require,module,exports){
 module["exports"] = [
   "#{prefix} #{Name.last_name}"
 ];
 
-},{}],888:[function(require,module,exports){
+},{}],912:[function(require,module,exports){
 module["exports"] = [
   "Công ty",
   "Cty TNHH",
@@ -44989,7 +53990,7 @@ module["exports"] = [
   "Chi nhánh"
 ];
 
-},{}],889:[function(require,module,exports){
+},{}],913:[function(require,module,exports){
 var vi = {};
 module['exports'] = vi;
 vi.title = "Vietnamese";
@@ -45001,7 +54002,7 @@ vi.name = require("./name");
 vi.company = require("./company");
 vi.lorem = require("./lorem");
 
-},{"./address":883,"./cell_phone":885,"./company":886,"./internet":891,"./lorem":892,"./name":895,"./phone_number":899}],890:[function(require,module,exports){
+},{"./address":907,"./cell_phone":909,"./company":910,"./internet":915,"./lorem":916,"./name":919,"./phone_number":923}],914:[function(require,module,exports){
 module["exports"] = [
   "com",
   "net",
@@ -45010,11 +54011,11 @@ module["exports"] = [
   "com.vn"
 ];
 
-},{}],891:[function(require,module,exports){
-arguments[4][115][0].apply(exports,arguments)
-},{"./domain_suffix":890,"dup":115}],892:[function(require,module,exports){
-arguments[4][65][0].apply(exports,arguments)
-},{"./words":893,"dup":65}],893:[function(require,module,exports){
+},{}],915:[function(require,module,exports){
+arguments[4][96][0].apply(exports,arguments)
+},{"./domain_suffix":914,"dup":96}],916:[function(require,module,exports){
+arguments[4][46][0].apply(exports,arguments)
+},{"./words":917,"dup":46}],917:[function(require,module,exports){
 module["exports"] = [
   "đã",
   "đang",
@@ -45121,7 +54122,7 @@ module["exports"] = [
   "hương"
 ];
 
-},{}],894:[function(require,module,exports){
+},{}],918:[function(require,module,exports){
 module["exports"] = [
   "Phạm",
   "Nguyễn",
@@ -45151,14 +54152,14 @@ module["exports"] = [
   "Hà"
 ];
 
-},{}],895:[function(require,module,exports){
+},{}],919:[function(require,module,exports){
 var name = {};
 module['exports'] = name;
 name.first_name = require("./first_name");
 name.last_name = require("./last_name");
 name.name = require("./name");
 
-},{"./first_name":894,"./last_name":896,"./name":897}],896:[function(require,module,exports){
+},{"./first_name":918,"./last_name":920,"./name":921}],920:[function(require,module,exports){
 module["exports"] = [
   "Nam",
   "Trung",
@@ -45235,18 +54236,18 @@ module["exports"] = [
   "Nhàn"
 ];
 
-},{}],897:[function(require,module,exports){
+},{}],921:[function(require,module,exports){
 module["exports"] = [
   "#{first_name} #{last_name}",
   "#{first_name} #{last_name} #{last_name}",
   "#{first_name} #{last_name} #{last_name} #{last_name}"
 ];
 
-},{}],898:[function(require,module,exports){
-arguments[4][243][0].apply(exports,arguments)
-},{"dup":243}],899:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":898,"dup":74}],900:[function(require,module,exports){
+},{}],922:[function(require,module,exports){
+arguments[4][233][0].apply(exports,arguments)
+},{"dup":233}],923:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":922,"dup":55}],924:[function(require,module,exports){
 module["exports"] = [
   "#####",
   "####",
@@ -45255,9 +54256,9 @@ module["exports"] = [
   "#"
 ];
 
-},{}],901:[function(require,module,exports){
-arguments[4][778][0].apply(exports,arguments)
-},{"dup":778}],902:[function(require,module,exports){
+},{}],925:[function(require,module,exports){
+arguments[4][799][0].apply(exports,arguments)
+},{"dup":799}],926:[function(require,module,exports){
 module["exports"] = [
   "长",
   "上",
@@ -45282,7 +54283,7 @@ module["exports"] = [
   "包"
 ];
 
-},{}],903:[function(require,module,exports){
+},{}],927:[function(require,module,exports){
 module["exports"] = [
   "沙市",
   "京市",
@@ -45305,12 +54306,12 @@ module["exports"] = [
   "头市"
 ];
 
-},{}],904:[function(require,module,exports){
+},{}],928:[function(require,module,exports){
 module["exports"] = [
   "中国"
 ];
 
-},{}],905:[function(require,module,exports){
+},{}],929:[function(require,module,exports){
 var address = {};
 module['exports'] = address;
 address.city_prefix = require("./city_prefix");
@@ -45325,9 +54326,9 @@ address.street_name = require("./street_name");
 address.street_address = require("./street_address");
 address.default_country = require("./default_country");
 
-},{"./building_number":900,"./city":901,"./city_prefix":902,"./city_suffix":903,"./default_country":904,"./postcode":906,"./state":907,"./state_abbr":908,"./street_address":909,"./street_name":910,"./street_suffix":911}],906:[function(require,module,exports){
-arguments[4][701][0].apply(exports,arguments)
-},{"dup":701}],907:[function(require,module,exports){
+},{"./building_number":924,"./city":925,"./city_prefix":926,"./city_suffix":927,"./default_country":928,"./postcode":930,"./state":931,"./state_abbr":932,"./street_address":933,"./street_name":934,"./street_suffix":935}],930:[function(require,module,exports){
+arguments[4][722][0].apply(exports,arguments)
+},{"dup":722}],931:[function(require,module,exports){
 module["exports"] = [
   "北京市",
   "上海市",
@@ -45365,7 +54366,7 @@ module["exports"] = [
   "澳门"
 ];
 
-},{}],908:[function(require,module,exports){
+},{}],932:[function(require,module,exports){
 module["exports"] = [
   "京",
   "沪",
@@ -45403,17 +54404,17 @@ module["exports"] = [
   "澳"
 ];
 
-},{}],909:[function(require,module,exports){
+},{}],933:[function(require,module,exports){
 module["exports"] = [
   "#{street_name}#{building_number}号"
 ];
 
-},{}],910:[function(require,module,exports){
+},{}],934:[function(require,module,exports){
 module["exports"] = [
   "#{Name.last_name}#{street_suffix}"
 ];
 
-},{}],911:[function(require,module,exports){
+},{}],935:[function(require,module,exports){
 module["exports"] = [
   "巷",
   "街",
@@ -45425,7 +54426,7 @@ module["exports"] = [
   "栋"
 ];
 
-},{}],912:[function(require,module,exports){
+},{}],936:[function(require,module,exports){
 var zh_CN = {};
 module['exports'] = zh_CN;
 zh_CN.title = "Chinese";
@@ -45433,7 +54434,7 @@ zh_CN.address = require("./address");
 zh_CN.name = require("./name");
 zh_CN.phone_number = require("./phone_number");
 
-},{"./address":905,"./name":914,"./phone_number":918}],913:[function(require,module,exports){
+},{"./address":929,"./name":938,"./phone_number":942}],937:[function(require,module,exports){
 module["exports"] = [
   "王",
   "李",
@@ -45537,9 +54538,9 @@ module["exports"] = [
   "孔"
 ];
 
-},{}],914:[function(require,module,exports){
-arguments[4][895][0].apply(exports,arguments)
-},{"./first_name":913,"./last_name":915,"./name":916,"dup":895}],915:[function(require,module,exports){
+},{}],938:[function(require,module,exports){
+arguments[4][919][0].apply(exports,arguments)
+},{"./first_name":937,"./last_name":939,"./name":940,"dup":919}],939:[function(require,module,exports){
 module["exports"] = [
   "绍齐",
   "博文",
@@ -45677,25 +54678,25 @@ module["exports"] = [
   "彬"
 ];
 
-},{}],916:[function(require,module,exports){
+},{}],940:[function(require,module,exports){
 module["exports"] = [
   "#{first_name}#{last_name}"
 ];
 
-},{}],917:[function(require,module,exports){
+},{}],941:[function(require,module,exports){
 module["exports"] = [
   "###-########",
   "####-########",
   "###########"
 ];
 
-},{}],918:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":917,"dup":74}],919:[function(require,module,exports){
-arguments[4][394][0].apply(exports,arguments)
-},{"dup":394}],920:[function(require,module,exports){
-arguments[4][778][0].apply(exports,arguments)
-},{"dup":778}],921:[function(require,module,exports){
+},{}],942:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":941,"dup":55}],943:[function(require,module,exports){
+arguments[4][384][0].apply(exports,arguments)
+},{"dup":384}],944:[function(require,module,exports){
+arguments[4][799][0].apply(exports,arguments)
+},{"dup":799}],945:[function(require,module,exports){
 module["exports"] = [
   "臺北",
   "新北",
@@ -45719,28 +54720,28 @@ module["exports"] = [
   "連江"
 ];
 
-},{}],922:[function(require,module,exports){
+},{}],946:[function(require,module,exports){
 module["exports"] = [
   "縣",
   "市"
 ];
 
-},{}],923:[function(require,module,exports){
+},{}],947:[function(require,module,exports){
 module["exports"] = [
   "Taiwan (R.O.C.)"
 ];
 
-},{}],924:[function(require,module,exports){
-arguments[4][905][0].apply(exports,arguments)
-},{"./building_number":919,"./city":920,"./city_prefix":921,"./city_suffix":922,"./default_country":923,"./postcode":925,"./state":926,"./state_abbr":927,"./street_address":928,"./street_name":929,"./street_suffix":930,"dup":905}],925:[function(require,module,exports){
-arguments[4][701][0].apply(exports,arguments)
-},{"dup":701}],926:[function(require,module,exports){
+},{}],948:[function(require,module,exports){
+arguments[4][929][0].apply(exports,arguments)
+},{"./building_number":943,"./city":944,"./city_prefix":945,"./city_suffix":946,"./default_country":947,"./postcode":949,"./state":950,"./state_abbr":951,"./street_address":952,"./street_name":953,"./street_suffix":954,"dup":929}],949:[function(require,module,exports){
+arguments[4][722][0].apply(exports,arguments)
+},{"dup":722}],950:[function(require,module,exports){
 module["exports"] = [
   "福建省",
   "台灣省"
 ];
 
-},{}],927:[function(require,module,exports){
+},{}],951:[function(require,module,exports){
 module["exports"] = [
   "北",
   "新北",
@@ -45765,14 +54766,14 @@ module["exports"] = [
   "馬"
 ];
 
-},{}],928:[function(require,module,exports){
+},{}],952:[function(require,module,exports){
 module["exports"] = [
   "#{street_name}#{building_number}號"
 ];
 
-},{}],929:[function(require,module,exports){
-arguments[4][910][0].apply(exports,arguments)
-},{"dup":910}],930:[function(require,module,exports){
+},{}],953:[function(require,module,exports){
+arguments[4][934][0].apply(exports,arguments)
+},{"dup":934}],954:[function(require,module,exports){
 module["exports"] = [
   "街",
   "路",
@@ -45782,7 +54783,7 @@ module["exports"] = [
   "西路"
 ];
 
-},{}],931:[function(require,module,exports){
+},{}],955:[function(require,module,exports){
 var zh_TW = {};
 module['exports'] = zh_TW;
 zh_TW.title = "Chinese (Taiwan)";
@@ -45790,7 +54791,7 @@ zh_TW.address = require("./address");
 zh_TW.name = require("./name");
 zh_TW.phone_number = require("./phone_number");
 
-},{"./address":924,"./name":933,"./phone_number":937}],932:[function(require,module,exports){
+},{"./address":948,"./name":957,"./phone_number":961}],956:[function(require,module,exports){
 module["exports"] = [
   "王",
   "李",
@@ -45894,9 +54895,9 @@ module["exports"] = [
   "孔"
 ];
 
-},{}],933:[function(require,module,exports){
-arguments[4][895][0].apply(exports,arguments)
-},{"./first_name":932,"./last_name":934,"./name":935,"dup":895}],934:[function(require,module,exports){
+},{}],957:[function(require,module,exports){
+arguments[4][919][0].apply(exports,arguments)
+},{"./first_name":956,"./last_name":958,"./name":959,"dup":919}],958:[function(require,module,exports){
 module["exports"] = [
   "紹齊",
   "博文",
@@ -46023,53 +55024,105 @@ module["exports"] = [
   "聰健"
 ];
 
-},{}],935:[function(require,module,exports){
-arguments[4][916][0].apply(exports,arguments)
-},{"dup":916}],936:[function(require,module,exports){
+},{}],959:[function(require,module,exports){
+arguments[4][940][0].apply(exports,arguments)
+},{"dup":940}],960:[function(require,module,exports){
 module["exports"] = [
   "0#-#######",
   "02-########",
   "09##-######"
 ];
 
-},{}],937:[function(require,module,exports){
-arguments[4][74][0].apply(exports,arguments)
-},{"./formats":936,"dup":74}],938:[function(require,module,exports){
+},{}],961:[function(require,module,exports){
+arguments[4][55][0].apply(exports,arguments)
+},{"./formats":960,"dup":55}],962:[function(require,module,exports){
 
+/**
+ *
+ * @namespace faker.lorem
+ */
 var Lorem = function (faker) {
   var self = this;
   var Helpers = faker.helpers;
 
-  self.words = function (num) {
-      if (typeof num == 'undefined') { num = 3; }
-      return Helpers.shuffle(faker.definitions.lorem.words).slice(0, num);
+  /**
+   * word
+   *
+   * @method faker.lorem.word
+   * @param {number} num
+   */
+  self.word = function (num) {
+    return faker.random.arrayElement(faker.definitions.lorem.words);
   };
 
+  /**
+   * generates a space separated list of words
+   *
+   * @method faker.lorem.words
+   * @param {number} num number of words, defaults to 3
+   */
+  self.words = function (num) {
+      if (typeof num == 'undefined') { num = 3; }
+      var words = [];
+      for (var i = 0; i < num; i++) {
+        words.push(faker.lorem.word());
+      }
+      return words.join(' ');
+  };
+
+  /**
+   * sentence
+   *
+   * @method faker.lorem.sentence
+   * @param {number} wordCount defaults to a random number between 3 and 10
+   * @param {number} range
+   */
   self.sentence = function (wordCount, range) {
-      if (typeof wordCount == 'undefined') { wordCount = 3; }
-      if (typeof range == 'undefined') { range = 7; }
+      if (typeof wordCount == 'undefined') { wordCount = faker.random.number({ min: 3, max: 10 }); }
+      // if (typeof range == 'undefined') { range = 7; }
 
       // strange issue with the node_min_test failing for captialize, please fix and add faker.lorem.back
       //return  faker.lorem.words(wordCount + Helpers.randomNumber(range)).join(' ').capitalize();
 
-      var sentence = faker.lorem.words(wordCount + faker.random.number(range)).join(' ');
+      var sentence = faker.lorem.words(wordCount);
       return sentence.charAt(0).toUpperCase() + sentence.slice(1) + '.';
   };
 
-  self.sentences = function (sentenceCount) {
-      if (typeof sentenceCount == 'undefined') { sentenceCount = 3; }
+  /**
+   * sentences
+   *
+   * @method faker.lorem.sentences
+   * @param {number} sentenceCount defautls to a random number between 2 and 6
+   * @param {string} separator defaults to `' '`
+   */
+  self.sentences = function (sentenceCount, separator) {
+      if (typeof sentenceCount === 'undefined') { sentenceCount = faker.random.number({ min: 2, max: 6 });}
+      if (typeof separator == 'undefined') { separator = " "; }
       var sentences = [];
       for (sentenceCount; sentenceCount > 0; sentenceCount--) {
         sentences.push(faker.lorem.sentence());
       }
-      return sentences.join("\n");
+      return sentences.join(separator);
   };
 
+  /**
+   * paragraph
+   *
+   * @method faker.lorem.paragraph
+   * @param {number} sentenceCount defaults to 3
+   */
   self.paragraph = function (sentenceCount) {
       if (typeof sentenceCount == 'undefined') { sentenceCount = 3; }
       return faker.lorem.sentences(sentenceCount + faker.random.number(3));
   };
 
+  /**
+   * paragraphs
+   *
+   * @method faker.lorem.paragraphs
+   * @param {number} paragraphCount defaults to 3
+   * @param {string} separatora defaults to `'\n \r'`
+   */
   self.paragraphs = function (paragraphCount, separator) {
     if (typeof separator === "undefined") {
       separator = "\n \r";
@@ -46081,16 +55134,50 @@ var Lorem = function (faker) {
     }
     return paragraphs.join(separator);
   }
-  
+
+  /**
+   * returns random text based on a random lorem method
+   *
+   * @method faker.lorem.text
+   * @param {number} times
+   */
+  self.text = function loremText (times) {
+    var loremMethods = ['lorem.word', 'lorem.words', 'lorem.sentence', 'lorem.sentences', 'lorem.paragraph', 'lorem.paragraphs', 'lorem.lines'];
+    var randomLoremMethod = faker.random.arrayElement(loremMethods);
+    return faker.fake('{{' + randomLoremMethod + '}}');
+  };
+
+  /**
+   * returns lines of lorem separated by `'\n'`
+   *
+   * @method faker.lorem.lines
+   * @param {number} lineCount defaults to a random number between 1 and 5
+   */
+  self.lines = function lines (lineCount) {
+    if (typeof lineCount === 'undefined') { lineCount = faker.random.number({ min: 1, max: 5 });}
+    return faker.lorem.sentences(lineCount, '\n')
+  };
+
   return self;
 };
 
 
 module["exports"] = Lorem;
 
-},{}],939:[function(require,module,exports){
+},{}],963:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.name
+ */
 function Name (faker) {
 
+  /**
+   * firstName
+   *
+   * @method firstName
+   * @param {mixed} gender
+   * @memberof faker.name
+   */
   this.firstName = function (gender) {
     if (typeof faker.definitions.name.male_first_name !== "undefined" && typeof faker.definitions.name.female_first_name !== "undefined") {
       // some locale datasets ( like ru ) have first_name split by gender. since the name.first_name field does not exist in these datasets,
@@ -46107,6 +55194,13 @@ function Name (faker) {
     return faker.random.arrayElement(faker.definitions.name.first_name);
   };
 
+  /**
+   * lastName
+   *
+   * @method lastName
+   * @param {mixed} gender
+   * @memberof faker.name
+   */
   this.lastName = function (gender) {
     if (typeof faker.definitions.name.male_last_name !== "undefined" && typeof faker.definitions.name.female_last_name !== "undefined") {
       // some locale datasets ( like ru ) have last_name split by gender. i have no idea how last names can have genders, but also i do not speak russian
@@ -46123,6 +55217,15 @@ function Name (faker) {
     return faker.random.arrayElement(faker.definitions.name.last_name);
   };
 
+  /**
+   * findName
+   *
+   * @method findName
+   * @param {string} firstName
+   * @param {string} lastName
+   * @param {mixed} gender
+   * @memberof faker.name
+   */
   this.findName = function (firstName, lastName, gender) {
       var r = faker.random.number(8);
       var prefix, suffix;
@@ -46135,12 +55238,12 @@ function Name (faker) {
       lastName = lastName || faker.name.lastName(gender);
       switch (r) {
       case 0:
-          prefix = faker.name.prefix();
+          prefix = faker.name.prefix(gender);
           if (prefix) {
               return prefix + " " + firstName + " " + lastName;
           }
       case 1:
-          suffix = faker.name.prefix();
+          suffix = faker.name.suffix(gender);
           if (suffix) {
               return firstName + " " + lastName + " " + suffix;
           }
@@ -46149,20 +55252,55 @@ function Name (faker) {
       return firstName + " " + lastName;
   };
 
+  /**
+   * jobTitle
+   *
+   * @method jobTitle
+   * @memberof faker.name
+   */
   this.jobTitle = function () {
     return  faker.name.jobDescriptor() + " " +
       faker.name.jobArea() + " " +
       faker.name.jobType();
   };
-
-  this.prefix = function () {
-      return faker.random.arrayElement(faker.definitions.name.prefix);
+  
+  /**
+   * prefix
+   *
+   * @method prefix
+   * @param {mixed} gender
+   * @memberof faker.name
+   */
+  this.prefix = function (gender) {
+    if (typeof faker.definitions.name.male_prefix !== "undefined" && typeof faker.definitions.name.female_prefix !== "undefined") {
+      if (typeof gender !== 'number') {
+        gender = faker.random.number(1);
+      }
+      if (gender === 0) {
+        return faker.random.arrayElement(faker.locales[faker.locale].name.male_prefix);
+      } else {
+        return faker.random.arrayElement(faker.locales[faker.locale].name.female_prefix);
+      }
+    }
+    return faker.random.arrayElement(faker.definitions.name.prefix);
   };
 
+  /**
+   * suffix
+   *
+   * @method suffix
+   * @memberof faker.name
+   */
   this.suffix = function () {
       return faker.random.arrayElement(faker.definitions.name.suffix);
   };
 
+  /**
+   * title
+   *
+   * @method title
+   * @memberof faker.name
+   */
   this.title = function() {
       var descriptor  = faker.random.arrayElement(faker.definitions.name.title.descriptor),
           level       = faker.random.arrayElement(faker.definitions.name.title.level),
@@ -46171,14 +55309,32 @@ function Name (faker) {
       return descriptor + " " + level + " " + job;
   };
 
+  /**
+   * jobDescriptor
+   *
+   * @method jobDescriptor
+   * @memberof faker.name
+   */
   this.jobDescriptor = function () {
     return faker.random.arrayElement(faker.definitions.name.title.descriptor);
   };
 
+  /**
+   * jobArea
+   *
+   * @method jobArea
+   * @memberof faker.name
+   */
   this.jobArea = function () {
     return faker.random.arrayElement(faker.definitions.name.title.level);
   };
 
+  /**
+   * jobType
+   *
+   * @method jobType
+   * @memberof faker.name
+   */
   this.jobType = function () {
     return faker.random.arrayElement(faker.definitions.name.title.job);
   };
@@ -46186,21 +55342,43 @@ function Name (faker) {
 }
 
 module['exports'] = Name;
-},{}],940:[function(require,module,exports){
+
+},{}],964:[function(require,module,exports){
+/**
+ *
+ * @namespace faker.phone
+ */
 var Phone = function (faker) {
   var self = this;
 
+  /**
+   * phoneNumber
+   *
+   * @method faker.phone.phoneNumber
+   * @param {string} format
+   */
   self.phoneNumber = function (format) {
       format = format || faker.phone.phoneFormats();
       return faker.helpers.replaceSymbolWithNumber(format);
   };
 
   // FIXME: this is strange passing in an array index.
+  /**
+   * phoneNumberFormat
+   *
+   * @method faker.phone.phoneFormatsArrayIndex
+   * @param phoneFormatsArrayIndex
+   */
   self.phoneNumberFormat = function (phoneFormatsArrayIndex) {
       phoneFormatsArrayIndex = phoneFormatsArrayIndex || 0;
       return faker.helpers.replaceSymbolWithNumber(faker.definitions.phone_number.formats[phoneFormatsArrayIndex]);
   };
 
+  /**
+   * phoneFormats
+   *
+   * @method faker.phone.phoneFormats
+   */
   self.phoneFormats = function () {
     return faker.random.arrayElement(faker.definitions.phone_number.formats);
   };
@@ -46210,9 +55388,13 @@ var Phone = function (faker) {
 };
 
 module['exports'] = Phone;
-},{}],941:[function(require,module,exports){
+},{}],965:[function(require,module,exports){
 var mersenne = require('../vendor/mersenne');
 
+/**
+ *
+ * @namespace faker.random
+ */
 function Random (faker, seed) {
   // Use a user provided seed if it exists
   if (seed) {
@@ -46223,7 +55405,12 @@ function Random (faker, seed) {
       mersenne.seed(seed);
     }
   }
-  // returns a single random number based on a max number or range
+  /**
+   * returns a single random number based on a max number or range
+   *
+   * @method faker.random.number
+   * @param {mixed} options
+   */
   this.number = function (options) {
 
     if (typeof options === "number") {
@@ -46258,14 +55445,25 @@ function Random (faker, seed) {
 
   }
 
-  // takes an array and returns a random element of the array
+  /**
+   * takes an array and returns a random element of the array
+   *
+   * @method faker.random.arrayElement
+   * @param {array} array
+   */
   this.arrayElement = function (array) {
       array = array || ["a", "b", "c"];
       var r = faker.random.number({ max: array.length - 1 });
       return array[r];
   }
 
-  // takes an object and returns the randomly key or value
+  /**
+   * takes an object and returns the randomly key or value
+   *
+   * @method faker.random.objectElement
+   * @param {object} object
+   * @param {mixed} field
+   */
   this.objectElement = function (object, field) {
       object = object || { "foo": "bar", "too": "car" };
       var array = Object.keys(object);
@@ -46274,18 +55472,121 @@ function Random (faker, seed) {
       return field === "key" ? key : object[key];
   }
 
+  /**
+   * uuid
+   *
+   * @method faker.random.uuid
+   */
   this.uuid = function () {
+      var self = this;
       var RFC4122_TEMPLATE = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
       var replacePlaceholders = function (placeholder) {
-          var random = Math.random()*16|0;
+          var random = self.number({ min: 0, max: 15 });
           var value = placeholder == 'x' ? random : (random &0x3 | 0x8);
           return value.toString(16);
       };
       return RFC4122_TEMPLATE.replace(/[xy]/g, replacePlaceholders);
   }
 
-  this.boolean =function () {
+  /**
+   * boolean
+   *
+   * @method faker.random.boolean
+   */
+  this.boolean = function () {
       return !!faker.random.number(1)
+  }
+
+  // TODO: have ability to return specific type of word? As in: noun, adjective, verb, etc
+  /**
+   * word
+   *
+   * @method faker.random.word
+   * @param {string} type
+   */
+  this.word = function randomWord (type) {
+
+    var wordMethods = [
+    'commerce.department',
+    'commerce.productName',
+    'commerce.productAdjective',
+    'commerce.productMaterial',
+    'commerce.product',
+    'commerce.color',
+
+    'company.catchPhraseAdjective',
+    'company.catchPhraseDescriptor',
+    'company.catchPhraseNoun',
+    'company.bsAdjective',
+    'company.bsBuzz',
+    'company.bsNoun',
+    'address.streetSuffix',
+    'address.county',
+    'address.country',
+    'address.state',
+
+    'finance.accountName',
+    'finance.transactionType',
+    'finance.currencyName',
+
+    'hacker.noun',
+    'hacker.verb',
+    'hacker.adjective',
+    'hacker.ingverb',
+    'hacker.abbreviation',
+
+    'name.jobDescriptor',
+    'name.jobArea',
+    'name.jobType'];
+
+    // randomly pick from the many faker methods that can generate words
+    var randomWordMethod = faker.random.arrayElement(wordMethods);
+    return faker.fake('{{' + randomWordMethod + '}}');
+
+  }
+
+  /**
+   * randomWords
+   *
+   * @method faker.random.words
+   * @param {number} count defaults to a random value between 1 and 3
+   */
+  this.words = function randomWords (count) {
+    var words = [];
+    if (typeof count === "undefined") {
+      count = faker.random.number({min:1, max: 3});
+    }
+    for (var i = 0; i<count; i++) {
+      words.push(faker.random.word());
+    }
+    return words.join(' ');
+  }
+
+  /**
+   * locale
+   *
+   * @method faker.random.image
+   */
+  this.image = function randomImage () {
+    return faker.image.image();
+  }
+
+  /**
+   * locale
+   *
+   * @method faker.random.locale
+   */
+  this.locale = function randomLocale () {
+    return faker.random.arrayElement(Object.keys(faker.locales));
+  };
+
+  /**
+   * alphaNumeric
+   *
+   * @method faker.random.alphaNumeric
+   */
+  this.alphaNumeric = function alphaNumeric() {
+    return faker.random.arrayElement(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]);
   }
 
   return this;
@@ -46294,11 +55595,166 @@ function Random (faker, seed) {
 
 module['exports'] = Random;
 
+},{"../vendor/mersenne":967}],966:[function(require,module,exports){
+// generates fake data for many computer systems properties
+
+/**
+ *
+ * @namespace faker.system
+ */
+function System (faker) {
+
+  /**
+   * generates a file name with extension or optional type
+   *
+   * @method faker.system.fileName
+   * @param {string} ext
+   * @param {string} type
+   */
+  this.fileName = function (ext, type) {
+    var str = faker.fake("{{random.words}}.{{system.fileExt}}");
+    str = str.replace(/ /g, '_');
+    str = str.replace(/\,/g, '_');
+    str = str.replace(/\-/g, '_');
+    str = str.replace(/\\/g, '_');
+    str = str.toLowerCase();
+    return str;
+  };
+
+  /**
+   * commonFileName
+   *
+   * @method faker.system.commonFileName
+   * @param {string} ext
+   * @param {string} type
+   */
+  this.commonFileName = function (ext, type) {
+    var str = faker.random.words() + "." + (ext || faker.system.commonFileExt());
+    str = str.replace(/ /g, '_');
+    str = str.replace(/\,/g, '_');
+    str = str.replace(/\-/g, '_');
+    str = str.replace(/\\/g, '_');
+    str = str.toLowerCase();
+    return str;
+  };
+
+  /**
+   * mimeType
+   *
+   * @method faker.system.mimeType
+   */
+  this.mimeType = function () {
+    return faker.random.arrayElement(Object.keys(faker.definitions.system.mimeTypes));
+  };
+
+  /**
+   * returns a commonly used file type
+   *
+   * @method faker.system.commonFileType
+   */
+  this.commonFileType = function () {
+    var types = ['video', 'audio', 'image', 'text', 'application'];
+    return faker.random.arrayElement(types)
+  };
+
+  /**
+   * returns a commonly used file extension based on optional type
+   *
+   * @method faker.system.commonFileExt
+   * @param {string} type
+   */
+  this.commonFileExt = function (type) {
+    var types = [
+      'application/pdf',
+      'audio/mpeg',
+      'audio/wav',
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'video/mp4',
+      'video/mpeg',
+      'text/html'
+    ];
+    return faker.system.fileExt(faker.random.arrayElement(types));
+  };
 
 
-// module.exports = random;
+  /**
+   * returns any file type available as mime-type
+   *
+   * @method faker.system.fileType
+   */
+  this.fileType = function () {
+    var types = [];
+    var mimes = faker.definitions.system.mimeTypes;
+    Object.keys(mimes).forEach(function(m){
+      var parts = m.split('/');
+      if (types.indexOf(parts[0]) === -1) {
+        types.push(parts[0]);
+      }
+    });
+    return faker.random.arrayElement(types);
+  };
 
-},{"../vendor/mersenne":942}],942:[function(require,module,exports){
+  /**
+   * fileExt
+   *
+   * @method faker.system.fileExt
+   * @param {string} mimeType
+   */
+  this.fileExt = function (mimeType) {
+    var exts = [];
+    var mimes = faker.definitions.system.mimeTypes;
+
+    // get specific ext by mime-type
+    if (typeof mimes[mimeType] === "object") {
+      return faker.random.arrayElement(mimes[mimeType].extensions);
+    }
+
+    // reduce mime-types to those with file-extensions
+    Object.keys(mimes).forEach(function(m){
+      if (mimes[m].extensions instanceof Array) {
+        mimes[m].extensions.forEach(function(ext){
+          exts.push(ext)
+        });
+      }
+    });
+    return faker.random.arrayElement(exts);
+  };
+
+  /**
+   * not yet implemented
+   *
+   * @method faker.system.directoryPath
+   */
+  this.directoryPath = function () {
+    // TODO
+  };
+
+  /**
+   * not yet implemented
+   *
+   * @method faker.system.filePath
+   */
+  this.filePath = function () {
+    // TODO
+  };
+
+  /**
+   * semver
+   *
+   * @method faker.system.semver
+   */
+  this.semver = function () {
+      return [faker.random.number(9),
+              faker.random.number(9),
+              faker.random.number(9)].join('.');
+  }
+
+}
+
+module['exports'] = System;
+},{}],967:[function(require,module,exports){
 // this program is a JavaScript version of Mersenne Twister, with concealment and encapsulation in class,
 // an almost straight conversion from the original program, mt19937ar.c,
 // translated by y. okada on July 17, 2006.
@@ -46586,7 +56042,7 @@ exports.seed_array = function(A) {
     gen.init_by_array(A);
 }
 
-},{}],943:[function(require,module,exports){
+},{}],968:[function(require,module,exports){
 /*
  * password-generator
  * Copyright(c) 2011-2013 Bermi Ferrer <bermi@bermilabs.com>
@@ -46652,7 +56108,7 @@ exports.seed_array = function(A) {
 
   // Establish the root object, `window` in the browser, or `global` on the server.
 }(this));
-},{}],944:[function(require,module,exports){
+},{}],969:[function(require,module,exports){
 /*
 
 Copyright (c) 2012-2014 Jeffrey Mealo
@@ -46863,7 +56319,788 @@ exports.generate = function generate() {
     return browser[random[0]](random[1]);
 };
 
-},{}],945:[function(require,module,exports){
+},{}],970:[function(require,module,exports){
+module.exports = require('./lib/jsf')
+  .extend('chance', function() {
+    try {
+      return require('chance').Chance();
+    } catch (e) {
+      return null;
+    }
+  })
+  .extend('faker', function() {
+    try {
+      return require('faker');
+    } catch (e) {
+      return null;
+    }
+  });
+
+},{"./lib/jsf":974,"chance":1,"faker":9}],971:[function(require,module,exports){
+/**
+ * Generates randomized boolean value.
+ *
+ * @returns {boolean}
+ */
+module.exports = function() {
+  return Math.random() > 0.5;
+};
+
+},{}],972:[function(require,module,exports){
+/**
+ * Generates null value.
+ *
+ * @returns {null}
+ */
+module.exports = function() {
+  return null;
+};
+
+},{}],973:[function(require,module,exports){
+var random = require('./../util/random');
+
+var LIPSUM_WORDS = ('Lorem ipsum dolor sit amet consectetur adipisicing elit sed do eiusmod tempor incididunt ut labore'
+  + ' et dolore magna aliqua Ut enim ad minim veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea'
+  + ' commodo consequat Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla'
+  + ' pariatur Excepteur sint occaecat cupidatat non proident sunt in culpa qui officia deserunt mollit anim id est'
+  + ' laborum').split(' ');
+
+/**
+ * Generates randomized array of single lorem ipsum words.
+ *
+ * @param min
+ * @param max
+ * @returns {Array.<string>}
+ */
+module.exports = function(min, max) {
+  var words = random.shuffle(LIPSUM_WORDS),
+      length = random(min || 1, Math.min(LIPSUM_WORDS.length, max || min || 5));
+
+  return words.slice(0, length);
+};
+
+},{"./../util/random":987}],974:[function(require,module,exports){
+var container = require('./util/container'),
+    traverse = require('./util/traverse'),
+    formats = require('./util/formats'),
+    random = require('./util/random'),
+    merge = require('./util/merge');
+
+var deref = require('deref');
+
+function isKey(prop) {
+  return prop === 'enum' || prop === 'required' || prop === 'definitions';
+}
+
+function generate(schema, refs, ex) {
+  var $ = deref();
+
+  try {
+    var seen = {};
+
+    return traverse($(schema, refs, ex), [], function reduce(sub) {
+      if (seen[sub.$ref] <= 0) {
+        delete sub.$ref;
+        delete sub.oneOf;
+        delete sub.anyOf;
+        delete sub.allOf;
+        return sub;
+      }
+
+      if (typeof sub.$ref === 'string') {
+        var id = sub.$ref;
+
+        delete sub.$ref;
+
+        if (!seen[id]) {
+          // TODO: this should be configurable
+          seen[id] = random(1, 5);
+        }
+
+        seen[id] -= 1;
+
+        merge(sub, $.util.findByRef(id, $.refs));
+      }
+
+      if (Array.isArray(sub.allOf)) {
+        var schemas = sub.allOf;
+
+        delete sub.allOf;
+
+        // this is the only case where all sub-schemas
+        // must be resolved before any merge
+        schemas.forEach(function(s) {
+          merge(sub, reduce(s));
+        });
+      }
+
+      if (Array.isArray(sub.oneOf || sub.anyOf)) {
+        var mix = sub.oneOf || sub.anyOf;
+
+        delete sub.anyOf;
+        delete sub.oneOf;
+
+        merge(sub, random.pick(mix));
+      }
+
+      for (var prop in sub) {
+        if ((Array.isArray(sub[prop]) || typeof sub[prop] === 'object') && !isKey(prop)) {
+          sub[prop] = reduce(sub[prop]);
+        }
+      }
+
+      return sub;
+    });
+  } catch (e) {
+    if (e.path) {
+      throw new Error(e.message + ' in ' + '/' + e.path.join('/'));
+    } else {
+      throw e;
+    }
+  }
+}
+
+generate.formats = formats;
+
+// returns itself for chaining
+generate.extend = function(name, cb) {
+  container.set(name, cb);
+  return generate;
+};
+
+module.exports = generate;
+
+},{"./util/container":980,"./util/formats":982,"./util/merge":985,"./util/random":987,"./util/traverse":988,"deref":2}],975:[function(require,module,exports){
+var random = require('../util/random'),
+    traverse = require('../util/traverse'),
+    hasProps = require('../util/has-props');
+
+var ParseError = require('../util/error');
+
+function unique(path, items, value, sample, resolve) {
+  var tmp = [],
+      seen = [];
+
+  function walk(obj) {
+    var json = JSON.stringify(obj);
+
+    if (seen.indexOf(json) === -1) {
+      seen.push(json);
+      tmp.push(obj);
+    }
+  }
+
+  items.forEach(walk);
+
+  // TODO: find a better solution?
+  var limit = 100;
+
+  while (tmp.length !== items.length) {
+    walk(traverse(value.items || sample, path, resolve));
+
+    if (!limit--) {
+      break;
+    }
+  }
+
+  return tmp;
+}
+
+module.exports = function(value, path, resolve) {
+  var items = [];
+
+  if (!(value.items || value.additionalItems)) {
+    if (hasProps(value, 'minItems', 'maxItems', 'uniqueItems')) {
+      throw new ParseError('missing items for ' + JSON.stringify(value), path);
+    }
+
+    return items;
+  }
+
+  if (Array.isArray(value.items)) {
+    return Array.prototype.concat.apply(items, value.items.map(function(item, key) {
+      return traverse(item, path.concat(['items', key]), resolve);
+    }));
+  }
+
+  var length = random(value.minItems, value.maxItems, 1, 5),
+      sample = typeof value.additionalItems === 'object' ? value.additionalItems : {};
+
+  for (var current = items.length; current < length; current += 1) {
+    items.push(traverse(value.items || sample, path.concat(['items', current]), resolve));
+  }
+
+  if (value.uniqueItems) {
+    return unique(path.concat(['items']), items, value, sample, resolve);
+  }
+
+  return items;
+};
+
+},{"../util/error":981,"../util/has-props":983,"../util/random":987,"../util/traverse":988}],976:[function(require,module,exports){
+var number = require('./number');
+
+// The `integer` type is just a wrapper for the `number` type. The `number` type
+// returns floating point numbers, and `integer` type truncates the fraction
+// part, leaving the result as an integer.
+//
+module.exports = function(value) {
+  var generated = number(value);
+  // whether the generated number is positive or negative, need to use either
+  // floor (positive) or ceil (negative) function to get rid of the fraction
+  return generated > 0 ? Math.floor(generated) : Math.ceil(generated);
+};
+
+},{"./number":977}],977:[function(require,module,exports){
+var MIN_INTEGER = -100000000,
+    MAX_INTEGER = 100000000;
+
+var random = require('../util/random'),
+    string = require('./string');
+
+module.exports = function(value) {
+  if (value.faker || value.chance) {
+    return string(value);
+  }
+
+  var multipleOf = value.multipleOf;
+
+  var min = typeof value.minimum === 'undefined' ? MIN_INTEGER : value.minimum,
+      max = typeof value.maximum === 'undefined' ? MAX_INTEGER : value.maximum;
+
+  if (multipleOf) {
+    max = Math.floor(max / multipleOf) * multipleOf;
+    min = Math.ceil(min / multipleOf) * multipleOf;
+  }
+
+  if (value.exclusiveMinimum && value.minimum && min === value.minimum) {
+    min += multipleOf || 1;
+  }
+
+  if (value.exclusiveMaximum && value.maximum && max === value.maximum) {
+    max -= multipleOf || 1;
+  }
+
+  if (multipleOf) {
+    return Math.floor(random(min, max) / multipleOf) * multipleOf;
+  }
+
+  if (min > max) {
+    return NaN;
+  }
+
+  return random({
+    min: min,
+    max: max,
+    hasPrecision: true
+  });
+};
+
+},{"../util/random":987,"./string":979}],978:[function(require,module,exports){
+var container = require('../util/container'),
+    random = require('../util/random'),
+    words = require('../generators/words'),
+    traverse = require('../util/traverse'),
+    hasProps = require('../util/has-props');
+
+var RandExp = container.get('randexp'),
+    randexp = RandExp.randexp;
+
+var ParseError = require('../util/error');
+
+module.exports = function(value, path, resolve) {
+  var props = {};
+
+  if (!(value.properties || value.patternProperties || value.additionalProperties)) {
+    if (hasProps(value, 'minProperties', 'maxProperties', 'dependencies', 'required')) {
+      throw new ParseError('missing properties for ' + JSON.stringify(value), path);
+    }
+
+    return props;
+  }
+
+  var reqProps = value.required || [],
+      allProps = value.properties ? Object.keys(value.properties) : [];
+
+  reqProps.forEach(function(key) {
+    if (value.properties && value.properties[key]) {
+      props[key] = value.properties[key];
+    }
+  });
+
+  var optProps = allProps.filter(function(prop) {
+    return reqProps.indexOf(prop) === -1;
+  });
+
+  if (value.patternProperties) {
+    optProps = Array.prototype.concat.apply(optProps, Object.keys(value.patternProperties));
+  }
+
+  var length = random(value.minProperties, value.maxProperties, 0, optProps.length);
+
+  random.shuffle(optProps).slice(0, length).forEach(function(key) {
+    if (value.properties && value.properties[key]) {
+      props[key] = value.properties[key];
+    } else {
+      props[randexp(key)] = value.patternProperties[key];
+    }
+  });
+
+  var current = Object.keys(props).length,
+      sample = typeof value.additionalProperties === 'object' ? value.additionalProperties : {};
+
+  if (current < length) {
+    words(length - current).forEach(function(key) {
+      props[key + randexp('[a-f\\d]{4,7}')] = sample;
+    });
+  }
+
+  return traverse(props, path.concat(['properties']), resolve);
+};
+
+},{"../generators/words":973,"../util/container":980,"../util/error":981,"../util/has-props":983,"../util/random":987,"../util/traverse":988}],979:[function(require,module,exports){
+var container = require('../util/container');
+
+var faker = container.get('faker'),
+    chance = container.get('chance'),
+    RandExp = container.get('randexp'),
+    randexp = RandExp.randexp;
+
+var words = require('../generators/words'),
+    random = require('../util/random'),
+    formats = require('../util/formats');
+
+var regexps = {
+  email: '[a-zA-Z\\d][a-zA-Z\\d-]{1,13}[a-zA-Z\\d]@{hostname}',
+  hostname: '[a-zA-Z]{1,33}\\.[a-z]{2,4}',
+  ipv6: '[abcdef\\d]{4}(:[abcdef\\d]{4}){7}',
+  uri: '[a-zA-Z][a-zA-Z0-9+-.]*'
+};
+
+function get(obj, key) {
+  var parts = key.split('.');
+
+  while (parts.length) {
+    var prop = parts.shift();
+
+    if (!obj[prop]) {
+      break;
+    }
+
+    obj = obj[prop];
+  }
+
+  return obj;
+}
+
+function thunk() {
+  return words().join(' ');
+}
+
+function generate(value) {
+  if (value.use) {
+    var args = [],
+        path = value.key;
+
+    if (typeof path === 'object') {
+      path = Object.keys(path)[0];
+
+      if (Array.isArray(value.key[path])) {
+        args = value.key[path];
+      } else {
+        args.push(value.key[path]);
+      }
+    }
+
+    var gen = get(value.gen, path);
+
+    if (typeof gen !== 'function') {
+      throw new Error('unknown ' + value.use + '-generator for ' + JSON.stringify(value.key));
+    }
+
+    // see #116, #117 - faker.js 3.1.0 introduced local dependencies between generators
+    // making jsf break after upgrading from 3.0.1
+    var contextObject = value.gen;
+    if (value.use === "faker") {
+      var fakerModuleName = value.key.split('.')[0];
+      contextObject = value.gen[fakerModuleName];
+    }
+
+    return gen.apply(contextObject, args);
+  }
+
+  switch (value.format) {
+    case 'date-time':
+      return new Date(random(0, 100000000000000)).toISOString();
+
+    case 'email':
+    case 'hostname':
+    case 'ipv6':
+    case 'uri':
+      return randexp(regexps[value.format]).replace(/\{(\w+)\}/, function(matches, key) {
+        return randexp(regexps[key]);
+      });
+
+    case 'ipv4':
+      return [0, 0, 0, 0].map(function() {
+        return random(0, 255);
+      }).join('.');
+
+    case 'regex':
+      // TODO: discuss
+      return '.+?';
+
+    default:
+      var callback = formats(value.format);
+
+      if (typeof callback !== 'function') {
+        throw new Error('unknown generator for ' + JSON.stringify(value.format));
+      }
+
+      var generators = {
+        faker: faker,
+        chance: chance,
+        randexp: randexp
+      };
+
+      return callback(generators, value);
+  }
+}
+
+module.exports = function(value) {
+  if (value.faker || value.chance) {
+    return generate({
+      use: value.faker ? 'faker' : 'chance',
+      gen: value.faker ? faker : chance,
+      key: value.faker || value.chance
+    });
+  }
+
+  if (value.format) {
+    return generate(value);
+  }
+
+  if (value.pattern) {
+    return randexp(value.pattern);
+  }
+
+  var min = Math.max(0, value.minLength || 0),
+      max = random(min, value.maxLength || 140);
+
+  var sample = thunk();
+
+  while (sample.length < min) {
+    sample += thunk();
+  }
+
+  if (sample.length > max) {
+    sample = sample.substr(0, max);
+  }
+
+  return sample;
+};
+
+},{"../generators/words":973,"../util/container":980,"../util/formats":982,"../util/random":987}],980:[function(require,module,exports){
+// static requires - handle both initial dependency load (deps will be available
+// among other modules) as well as they will be included by browserify AST
+var container = {
+  faker: null,
+  chance: null,
+
+  // randexp is required for "pattern" values
+  randexp: require('randexp')
+};
+
+module.exports = {
+  set: function(name, callback) {
+    if (typeof container[name] === 'undefined') {
+      throw new ReferenceError('"' + name + '" dependency is not allowed.');
+    }
+
+    container[name] = callback(container[name]);
+  },
+  get: function(name) {
+    if (typeof container[name] === 'undefined') {
+      throw new ReferenceError('"' + name + '" dependency doesn\'t exist.');
+    }
+
+    return container[name];
+  }
+};
+
+},{"randexp":989}],981:[function(require,module,exports){
+function ParseError(message, path) {
+  this.message = message;
+  this.path = path;
+  this.name = 'ParseError';
+}
+
+ParseError.prototype = Error.prototype;
+
+module.exports = ParseError;
+
+},{}],982:[function(require,module,exports){
+var registry = {};
+
+module.exports = function(name, callback) {
+  if (callback) {
+    registry[name] = callback;
+  } else if (typeof name === 'object') {
+    for (var method in name) {
+      registry[method] = name[method];
+    }
+  } else if (name) {
+    return registry[name];
+  }
+
+  return registry;
+};
+
+},{}],983:[function(require,module,exports){
+module.exports = function(obj) {
+  return Array.prototype.slice.call(arguments, 1).filter(function(key) {
+    return typeof obj[key] !== 'undefined';
+  }).length > 0;
+};
+
+},{}],984:[function(require,module,exports){
+var inferredProperties = {
+  array: [
+    'additionalItems',
+    'items',
+    'maxItems',
+    'minItems',
+    'uniqueItems'
+  ],
+  integer: [
+    'exclusiveMaximum',
+    'exclusiveMinimum',
+    'maximum',
+    'minimum',
+    'multipleOf'
+  ],
+  object: [
+    'additionalProperties',
+    'dependencies',
+    'maxProperties',
+    'minProperties',
+    'patternProperties',
+    'properties',
+    'required'
+  ],
+  string: [
+    'maxLength',
+    'minLength',
+    'pattern'
+  ]
+};
+
+inferredProperties.number = inferredProperties.integer;
+
+var subschemaProperties = [
+  'additionalItems',
+  'items',
+  'additionalProperties',
+  'dependencies',
+  'patternProperties',
+  'properties'
+];
+
+/**
+ * Iterates through all keys of `obj` and:
+ * - checks whether those keys match properties of a given inferred type
+ * - makes sure that `obj` is not a subschema; _Do not attempt to infer properties named as subschema containers. The
+ * reason for this is that any property name within those containers that matches one of the properties used for
+ * inferring missing type values causes the container itself to get processed which leads to invalid output. (Issue 62)_
+ *
+ * @returns {boolean}
+ */
+function matchesType(obj, lastElementInPath, inferredTypeProperties) {
+  return Object.keys(obj).filter(function(prop) {
+    var isSubschema = subschemaProperties.indexOf(lastElementInPath) > -1,
+      inferredPropertyFound = inferredTypeProperties.indexOf(prop) > -1;
+    if (inferredPropertyFound && !isSubschema) {
+      return true;
+    }
+  }).length > 0;
+}
+
+/**
+ * Checks whether given `obj` type might be inferred. The mechanism iterates through all inferred types definitions,
+ * tries to match allowed properties with properties of given `obj`. Returns type name, if inferred, or null.
+ *
+ * @returns {string|null}
+ */
+module.exports = function(obj, schemaPath) {
+  for (var typeName in inferredProperties) {
+    var lastElementInPath = schemaPath[schemaPath.length - 1];
+    if (matchesType(obj, lastElementInPath, inferredProperties[typeName])) {
+      return typeName;
+    }
+  }
+};
+
+},{}],985:[function(require,module,exports){
+function clone(arr) {
+  var out = [];
+  arr.forEach(function(item, index) {
+    if (typeof item === 'object' && item !== null) {
+      out[index] = Array.isArray(item) ? clone(item) : merge({}, item);
+    } else {
+      out[index] = item;
+    }
+  });
+  return out;
+}
+
+function merge(a, b) {
+  for (var key in b) {
+    if (typeof b[key] !== 'object' || b[key] === null) {
+      a[key] = b[key];
+    } else if (Array.isArray(b[key])) {
+      a[key] = (a[key] || []).concat(clone(b[key]));
+    } else if (typeof a[key] !== 'object' || a[key] === null || Array.isArray(a[key])) {
+      a[key] = merge({}, b[key]);
+    } else {
+      a[key] = merge(a[key], b[key]);
+    }
+  }
+  return a;
+}
+
+module.exports = merge;
+
+},{}],986:[function(require,module,exports){
+module.exports = {
+  boolean: require('../generators/boolean'),
+  null: require('../generators/null'),
+  array: require('../types/array'),
+  integer: require('../types/integer'),
+  number: require('../types/number'),
+  object: require('../types/object'),
+  string: require('../types/string')
+};
+
+},{"../generators/boolean":971,"../generators/null":972,"../types/array":975,"../types/integer":976,"../types/number":977,"../types/object":978,"../types/string":979}],987:[function(require,module,exports){
+function random(min, max, defMin, defMax) {
+  var hasPrecision = false;
+
+  if (typeof min === 'object') {
+    hasPrecision = min.hasPrecision;
+    max = min.max;
+    defMin = min.defMin;
+    defMax = min.defMax;
+    min = min.min;
+  }
+
+  defMin = typeof defMin === 'undefined' ? random.MIN_NUMBER : defMin;
+  defMax = typeof defMax === 'undefined' ? random.MAX_NUMBER : defMax;
+
+  min = typeof min === 'undefined' ? defMin : min;
+  max = typeof max === 'undefined' ? defMax : max;
+
+  if (max < min) {
+    max += min;
+  }
+
+  var number = Math.random() * (max - min) + min;
+
+  if (!hasPrecision) {
+    return parseInt(number, 10);
+  }
+
+  return number;
+};
+
+random.shuffle = function(obj) {
+  var copy = obj.slice(),
+      length = obj.length;
+
+  for (; length > 0;) {
+    var key = Math.floor(Math.random() * length),
+        tmp = copy[--length];
+
+    copy[length] = copy[key];
+    copy[key] = tmp;
+  }
+
+  return copy;
+};
+
+random.pick = function(obj) {
+  return obj[Math.floor(Math.random() * obj.length)];
+};
+
+random.MIN_NUMBER = -100;
+random.MAX_NUMBER = 100;
+
+module.exports = random;
+
+},{}],988:[function(require,module,exports){
+var random = require('./random');
+
+var ParseError = require('./error');
+
+var inferredType = require('./inferred');
+
+var primitives = null;
+
+function traverse(obj, path, resolve) {
+  resolve(obj);
+
+  var copy = {};
+
+  if (Array.isArray(obj)) {
+    copy = [];
+  }
+
+  if (Array.isArray(obj.enum)) {
+    return random.pick(obj.enum);
+  }
+
+  var type = obj.type;
+
+  if (Array.isArray(type)) {
+    type = random.pick(type);
+  } else if (typeof type === 'undefined') {
+    // Attempt to infer the type
+    type = inferredType(obj, path) || type;
+  }
+
+  if (typeof type === 'string') {
+    if (!primitives[type]) {
+      throw new ParseError('unknown primitive ' + JSON.stringify(type), path.concat(['type']));
+    }
+
+    try {
+      return primitives[type](obj, path, resolve);
+    } catch (e) {
+      if (typeof e.path === 'undefined') {
+        throw new ParseError(e.message, path);
+      }
+
+      throw e;
+    }
+  }
+
+  for (var prop in obj) {
+    if (typeof obj[prop] === 'object' && prop !== 'definitions') {
+      copy[prop] = traverse(obj[prop], path.concat([prop]), resolve);
+    } else {
+      copy[prop] = obj[prop];
+    }
+  }
+
+  return copy;
+}
+
+module.exports = function() {
+  primitives = primitives || require('./primitives');
+
+  return traverse.apply(null, arguments);
+};
+
+},{"./error":981,"./inferred":984,"./primitives":986,"./random":987}],989:[function(require,module,exports){
 var ret = require('ret');
 var DRange = require('discontinuous-range');
 var types = ret.types;
@@ -47101,7 +57338,7 @@ function gen(token, groups) {
 
 
 
-},{"discontinuous-range":946,"ret":947}],946:[function(require,module,exports){
+},{"discontinuous-range":990,"ret":991}],990:[function(require,module,exports){
 //protected helper class
 function _SubRange(low, high) {
     this.low = low;
@@ -47247,7 +57484,7 @@ DiscontinuousRange.prototype.clone = function () {
 
 module.exports = DiscontinuousRange;
 
-},{}],947:[function(require,module,exports){
+},{}],991:[function(require,module,exports){
 var util      = require('./util');
 var types     = require('./types');
 var sets      = require('./sets');
@@ -47527,7 +57764,7 @@ module.exports = function(regexpStr) {
 
 module.exports.types = types;
 
-},{"./positions":948,"./sets":949,"./types":950,"./util":951}],948:[function(require,module,exports){
+},{"./positions":992,"./sets":993,"./types":994,"./util":995}],992:[function(require,module,exports){
 var types = require('./types');
 
 exports.wordBoundary = function() {
@@ -47546,7 +57783,7 @@ exports.end = function() {
   return { type: types.POSITION, value: '$' };
 };
 
-},{"./types":950}],949:[function(require,module,exports){
+},{"./types":994}],993:[function(require,module,exports){
 var types = require('./types');
 
 var INTS = function() {
@@ -47630,7 +57867,7 @@ exports.anyChar = function() {
   return { type: types.SET, set: NOTANYCHAR(), not: true };
 };
 
-},{"./types":950}],950:[function(require,module,exports){
+},{"./types":994}],994:[function(require,module,exports){
 module.exports = {
     ROOT       : 0
   , GROUP      : 1
@@ -47642,7 +57879,7 @@ module.exports = {
   , CHAR       : 7
 };
 
-},{}],951:[function(require,module,exports){
+},{}],995:[function(require,module,exports){
 var types = require('./types');
 var sets  = require('./sets');
 
@@ -47755,7 +57992,7 @@ exports.error = function(regexp, msg) {
   throw new SyntaxError('Invalid regular expression: /' + regexp + '/: ' + msg);
 };
 
-},{"./sets":949,"./types":950}],952:[function(require,module,exports){
+},{"./sets":993,"./types":994}],996:[function(require,module,exports){
 module.exports={
   "type": "array",
   "minItems": 15,
@@ -47763,7 +58000,7 @@ module.exports={
     "enum": ["red", "green", "blue", "yellow"]
   }
 }
-},{}],953:[function(require,module,exports){
+},{}],997:[function(require,module,exports){
 module.exports={
     "type": "array",
     "items": [
@@ -47778,7 +58015,7 @@ module.exports={
         }
     ]
 }
-},{}],954:[function(require,module,exports){
+},{}],998:[function(require,module,exports){
 module.exports={
   "type": "array",
   "minItems": 100,
@@ -47787,11 +58024,11 @@ module.exports={
     "type": "integer"
   }
 }
-},{}],955:[function(require,module,exports){
+},{}],999:[function(require,module,exports){
 module.exports={
     "type": "boolean"
 }
-},{}],956:[function(require,module,exports){
+},{}],1000:[function(require,module,exports){
 module.exports={
     "type": "object",
     "properties": {
@@ -47814,7 +58051,7 @@ module.exports={
         "emailAddr"
     ]
 }
-},{}],957:[function(require,module,exports){
+},{}],1001:[function(require,module,exports){
 module.exports={
     "type": "object",
     "properties": {
@@ -47832,7 +58069,7 @@ module.exports={
         "email"
     ]
 }
-},{}],958:[function(require,module,exports){
+},{}],1002:[function(require,module,exports){
 module.exports={
     "type": "integer",
     "minimum": 600,
@@ -47840,7 +58077,7 @@ module.exports={
     "multipleOf": 7,
     "exclusiveMinimum": true
 }
-},{}],959:[function(require,module,exports){
+},{}],1003:[function(require,module,exports){
 module.exports={
     "type": "object",
     "properties": {
@@ -47887,7 +58124,7 @@ module.exports={
         }
     }
 }
-},{}],960:[function(require,module,exports){
+},{}],1004:[function(require,module,exports){
 var jsf = require('json-schema-faker');
 
 var schemas = {
@@ -48025,4 +58262,4 @@ $(document).ready(function () {
     });
 });
 
-},{"../schema/array/enum.json":952,"../schema/array/fixed.json":953,"../schema/array/n-times.json":954,"../schema/boolean.json":955,"../schema/chance/chance.json":956,"../schema/faker/faker.json":957,"../schema/integer.json":958,"../schema/reference.json":959,"json-schema-faker":1}]},{},[960]);
+},{"../schema/array/enum.json":996,"../schema/array/fixed.json":997,"../schema/array/n-times.json":998,"../schema/boolean.json":999,"../schema/chance/chance.json":1000,"../schema/faker/faker.json":1001,"../schema/integer.json":1002,"../schema/reference.json":1003,"json-schema-faker":970}]},{},[1004]);
